@@ -6,7 +6,7 @@ import { loadFills, saveFills, mergeFills } from "./fills-store";
 import { fillsToEpisodes } from "./positions";
 import { measureWindow } from "./exitwindow";
 import { latencyTax, buildVerdict } from "./backtest";
-import type { Episode, ExitDna, ExitWindow, Fill, WalletReport } from "./types";
+import type { AlarmReplay, AlarmReplayEpisode, Episode, ExitDna, ExitWindow, Fill, WalletReport } from "./types";
 import { LATENCIES_SEC } from "./types";
 
 const MAX_PAGES = 5;
@@ -90,6 +90,22 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+function mean(values: number[]): number {
+  return values.length === 0 ? 0 : values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+/** The open of the candle covering `t`, or the nearest available candle's price when `t` falls
+ * outside the fetched range (before the first candle: its open; after the last: its close) -
+ * covers a 24h-hold replay point that hasn't happened yet for a recently-closed episode. */
+function priceAt(candles: Candle[], t: number): number | null {
+  if (candles.length === 0) return null;
+  const sorted = [...candles].sort((a, b) => a.t - b.t);
+  if (t < sorted[0].t) return sorted[0].o;
+  if (t >= sorted[sorted.length - 1].T) return sorted[sorted.length - 1].c;
+  const containing = sorted.find((c) => t >= c.t && t < c.T);
+  return containing ? containing.o : null;
+}
+
 /** One plain sentence on why the latency backtest is empty or thin (needs 3+ eligible episodes,
  * see buildVerdict), or null when there's enough to trust the numbers. */
 function backtestNote(episodes: Episode[], eligibleCount: number, lookbackDays: number): string | null {
@@ -148,6 +164,53 @@ export function computeExitDna(episodes: Episode[]): ExitDna | null {
   else style = "mixed";
 
   return { sample, firstReduceToFlatMedianMin, fullExitAfterFirstReducePct, medianClips, firstReduceAtPnlPct, style };
+}
+
+/** Backtests the alarm against the wallet's own closed episodes: three hypothetical copiers, all
+ * anchored to the price at the wallet's first reduce (not its entry price, so observedOpen isn't
+ * required) - exit 60s after the alarm, exit 60s after the wallet's final exit, or hold 24h and
+ * do nothing. Only episodes with a real candle at all three replay points count. */
+export function computeAlarmReplay(episodes: Episode[], candlesByEpisode: (Candle[] | null)[]): AlarmReplay | null {
+  const perEpisode: AlarmReplayEpisode[] = [];
+
+  episodes.forEach((ep, i) => {
+    if (ep.closedAt === null || ep.exits.length === 0) return;
+    const candles = candlesByEpisode[i];
+    if (!candles || candles.length === 0) return;
+
+    const firstReduceAt = ep.exits[0].t;
+    const referencePx = ep.exits[0].px;
+    const alarmPx = priceAt(candles, firstReduceAt + 60_000);
+    const waitPx = priceAt(candles, ep.closedAt + 60_000);
+    const holdPx = priceAt(candles, firstReduceAt + 24 * 3_600_000);
+    if (alarmPx === null || waitPx === null || holdPx === null) return;
+
+    const sign = ep.direction === "long" ? 1 : -1;
+    const pct = (px: number) => ((px - referencePx) / referencePx) * sign * 100;
+
+    perEpisode.push({
+      coin: ep.coin,
+      direction: ep.direction,
+      firstReduceAt,
+      alarmPct: pct(alarmPx),
+      waitPct: pct(waitPx),
+      holdPct: pct(holdPx),
+    });
+  });
+
+  if (perEpisode.length === 0) return null;
+
+  const saves = perEpisode.map((e) => ({ coin: e.coin, save: e.alarmPct - e.waitPct }));
+  const best = saves.reduce((a, b) => (b.save > a.save ? b : a));
+
+  return {
+    episodes: perEpisode.length,
+    savedVsWaitingPct: mean(perEpisode.map((e) => e.alarmPct - e.waitPct)),
+    savedVsHoldingPct: mean(perEpisode.map((e) => e.alarmPct - e.holdPct)),
+    bestSaveCoin: best.coin,
+    bestSavePct: best.save,
+    perEpisode,
+  };
 }
 
 const reportCache = new Map<string, { report: WalletReport; cachedAt: number }>();
@@ -237,6 +300,7 @@ export async function buildReport(address: string, options: BuildReportOptions =
     unrealizedPnlUsd,
     episodes,
     exitDna: computeExitDna(episodes),
+    alarmReplay: computeAlarmReplay(episodes, candlesByEpisode),
     openPositions,
     nansenCalls: networkCallsSince(callsBefore),
     backtestEligible: eligible.length,

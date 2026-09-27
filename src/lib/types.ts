@@ -85,6 +85,31 @@ export interface ExitDna {
   style: "nuclear" | "scaler" | "trimmer" | "mixed";
 }
 
+/** One episode's outcome for three hypothetical copiers, all measured from the wallet's own
+ * first-reduce price: act on the alarm and exit 60s later, wait for the wallet's final exit
+ * (+60s), or ignore it and hold 24h. All percentages are direction-adjusted price moves. */
+export interface AlarmReplayEpisode {
+  coin: string;
+  direction: Direction;
+  firstReduceAt: number;
+  alarmPct: number;
+  waitPct: number;
+  holdPct: number;
+}
+
+/** Backtests the alarm itself: across the wallet's own closed episodes with observed candles,
+ * how much a copier who exited on the alarm would have saved versus waiting for the wallet's
+ * final exit, or versus not acting at all and holding 24h. Doesn't need observedOpen: every
+ * number here is anchored to the wallet's own first-reduce price, not its entry price. */
+export interface AlarmReplay {
+  episodes: number;
+  savedVsWaitingPct: number; // mean(alarmPct - waitPct)
+  savedVsHoldingPct: number; // mean(alarmPct - holdPct)
+  bestSaveCoin: string; // coin of the episode with the largest single alarmPct - waitPct save
+  bestSavePct: number;
+  perEpisode: AlarmReplayEpisode[];
+}
+
 export interface WalletReport {
   address: string;
   label: string | null; // Nansen label if known
@@ -101,6 +126,7 @@ export interface WalletReport {
   unrealizedPnlUsd: number | null;
   episodes: Episode[];
   exitDna: ExitDna | null; // null when there aren't enough closed, observed episodes to say anything
+  alarmReplay: AlarmReplay | null; // null when no closed episode has observed candles to replay
   openPositions: OpenPosition[];
   nansenCalls: number; // Nansen API calls this report cost
   backtestEligible: number; // episodes with a full observed entry+exit, used in the latency backtest
