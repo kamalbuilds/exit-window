@@ -17,6 +17,7 @@ import {
   formatProtectionLine,
   formatTestMessage,
   formatWhyAnswer,
+  friendlyNansenError,
   loadStore,
   markHeld,
   ownerStillHolds,
@@ -403,9 +404,9 @@ async function pollTelegram(): Promise<void> {
             result = await askWhyExiting(ctx.question);
             whyAnswerCache.set(cacheKey, result);
           } catch (err) {
-            await sendMessage(cbChat, `Could not reach the Nansen agent: ${err instanceof Error ? err.message : String(err)}`).catch(
-              () => {},
-            );
+            const reason = err instanceof Error ? err.message : String(err);
+            console.error("askWhyExiting failed:", reason);
+            await sendMessage(cbChat, `Could not reach the Nansen agent: ${friendlyNansenError(reason)}`).catch(() => {});
             continue;
           }
         }

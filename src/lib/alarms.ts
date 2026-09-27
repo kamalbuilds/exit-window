@@ -358,11 +358,24 @@ export interface SmartAlertOnboardingInput {
   detail: string; // for "skipped", the reason (e.g. no resolvable spot token for a HIP-3 market)
 }
 
+/** Turns a raw Nansen error (often a full JSON error body from nansenCall/askWhyExiting) into
+ * one plain sentence for a Telegram user - never dump the raw "{"error":"Bad
+ * Request","message":"...","code":"...","request_id":"..."}" body into a chat message. */
+export function friendlyNansenError(rawMessage: string): string {
+  if (/insufficient.credits|credits exhausted/i.test(rawMessage)) {
+    return "Nansen credits are exhausted right now.";
+  }
+  if (/plan limit/i.test(rawMessage)) {
+    return "Nansen's plan limit for this feature was reached.";
+  }
+  return "Nansen is temporarily unavailable.";
+}
+
 /** One line per distinct coin on whether Nansen's own on-chain smart alert got armed alongside
  * the Hyperliquid one. Long watches Smart Money outflow (selling = pulling out); short watches
  * inflow (buying = piling in) - matches intel.ts's buildSmartAlertRequest. */
 function formatSmartAlertLine(s: SmartAlertOnboardingInput): string {
-  if (s.status === "skipped") return `Nansen on-chain alert skipped for ${s.coin}: ${s.detail}`;
+  if (s.status === "skipped") return `Nansen on-chain alert skipped for ${s.coin}: ${friendlyNansenError(s.detail)}`;
   const verb = s.direction === "long" ? "pulls out of" : "piles into";
   return `Nansen will also message you directly if Smart Money ${verb} ${s.coin} on-chain.`;
 }

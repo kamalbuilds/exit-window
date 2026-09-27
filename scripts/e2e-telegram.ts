@@ -88,8 +88,23 @@ async function waitForReply(
 // ---------------------------------------------------------------------------
 // HTTP + fly logs helpers
 // ---------------------------------------------------------------------------
+/** Retries a transient local network failure (DNS/connect blip) a few times before giving up - an
+ * ETIMEDOUT from this machine is not a signal about the app under test. */
+async function fetchRetry(url: string, init?: RequestInit, attempts = 3): Promise<Response> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await sleep(3000);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 async function postAlarm(owner: string, watches: unknown[]): Promise<{ code: string; deepLink: string }> {
-  const res = await fetch(`${BASE}/api/alarm`, {
+  const res = await fetchRetry(`${BASE}/api/alarm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ owner, watches }),
@@ -112,7 +127,7 @@ interface FeedRow {
 }
 
 async function getFeed(): Promise<FeedRow[]> {
-  const res = await fetch(`${BASE}/api/feed`);
+  const res = await fetchRetry(`${BASE}/api/feed`);
   if (!res.ok) throw new Error(`GET /api/feed failed (${res.status})`);
   return (await res.json()) as FeedRow[];
 }
@@ -320,17 +335,21 @@ async function step6(): Promise<void> {
   const started = Date.now();
   let fired: TgMsg | null = null;
   while (Date.now() - started < liveDeadlineMs) {
-    const msgs = await tgRead(BOT_CHAT, 10);
-    fired =
-      msgs.find(
-        (m) =>
-          m.id > bound.id &&
-          m.from !== "pranjalcodes" &&
-          new RegExp(reducer.coin, "i").test(m.text) &&
-          /reduced|closed|flipped/i.test(m.text) &&
-          !m.text.startsWith("Test alert"),
-      ) ?? null;
-    if (fired) break;
+    try {
+      const msgs = await tgRead(BOT_CHAT, 10);
+      fired =
+        msgs.find(
+          (m) =>
+            m.id > bound.id &&
+            m.from !== "pranjalcodes" &&
+            new RegExp(reducer.coin, "i").test(m.text) &&
+            /reduced|closed|flipped/i.test(m.text) &&
+            !m.text.startsWith("Test alert"),
+        ) ?? null;
+      if (fired) break;
+    } catch (err) {
+      info(step, `tg read hiccup, retrying: ${err instanceof Error ? err.message : String(err)}`);
+    }
     await sleep(20_000);
   }
 
