@@ -24,18 +24,53 @@ export async function getBotUsername(): Promise<string> {
   return cachedUsername;
 }
 
-export async function sendMessage(chatId: number | string, text: string, parseMode?: "HTML"): Promise<void> {
+export interface InlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface ReplyMarkup {
+  inline_keyboard: InlineKeyboardButton[][];
+}
+
+export async function sendMessage(
+  chatId: number | string,
+  text: string,
+  parseMode?: "HTML",
+  replyMarkup?: ReplyMarkup,
+): Promise<void> {
   const res = await fetch(`${apiBase()}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, ...(parseMode ? { parse_mode: parseMode } : {}) }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      ...(parseMode ? { parse_mode: parseMode } : {}),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`Telegram sendMessage ${res.status}`);
+}
+
+/** Must be called immediately on every callback_query, even before doing any slow work - until
+ * this is called the tapped button shows a loading spinner in the client. */
+export async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, ...(text ? { text } : {}) }),
+  });
+  if (!res.ok) throw new Error(`Telegram answerCallbackQuery ${res.status}`);
 }
 
 export interface TelegramUpdate {
   update_id: number;
   message?: { chat: { id: number }; text?: string };
+  callback_query?: {
+    id: string;
+    data?: string;
+    message?: { chat: { id: number }; message_id: number };
+  };
 }
 
 /** Long-polls for up to `timeoutSec`; Telegram holds the connection open and returns as soon as

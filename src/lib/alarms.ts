@@ -408,3 +408,66 @@ export function formatTestMessage(input: TestMessageInput): string {
     `before a 1% move against them. Report: ${appUrl}/w/${watch.leader}`
   );
 }
+
+// ---------------------------------------------------------------------------
+// "Why is it exiting?" - the inline-button question sent to the Nansen Agent, and the reply
+// formatting/cache key for its answer. The HTTP/SSE call itself and the callback_query wiring
+// live in scripts/alarm-worker.ts (impure); this stays pure and unit-testable.
+// ---------------------------------------------------------------------------
+
+export interface WhyQuestionInput {
+  leaderAddress: string;
+  leaderLabel: string | null;
+  coin: string;
+  direction: Direction;
+  pctClosed: number;
+  usdValue: number;
+  atMs: number;
+}
+
+/** Exact template for a real reduce: claims a reduce happened, so it must never be used for a
+ * /test message (see buildWhyTestQuestion for that). */
+export function buildWhyQuestion(input: WhyQuestionInput): string {
+  const { leaderAddress, leaderLabel, coin, direction, pctClosed, usdValue, atMs } = input;
+  const who = leaderLabel || shortAddr(leaderAddress);
+  const time = new Date(atMs).toISOString();
+  return (
+    `Hyperliquid wallet ${leaderAddress} (${who}) just reduced its ${coin} ${direction} by ` +
+    `${Math.round(pctClosed)}% (~$${Math.round(usdValue).toLocaleString("en-US")}) at ${time}. ` +
+    `What on-chain context explains Smart Money exiting ${coin} right now? Answer in under 80 words.`
+  );
+}
+
+export interface WhyTestQuestionInput {
+  leaderAddress: string;
+  leaderLabel: string | null;
+  coin: string;
+  direction: Direction;
+}
+
+/** For /test's "Why is it exiting?" button: /test must never claim a reduce happened, so this
+ * asks the hypothetical version of the same question instead of reusing buildWhyQuestion's
+ * "just reduced" wording against a reduce that never occurred. */
+export function buildWhyTestQuestion(input: WhyTestQuestionInput): string {
+  const { leaderAddress, leaderLabel, coin, direction } = input;
+  const who = leaderLabel || shortAddr(leaderAddress);
+  return (
+    `Hyperliquid wallet ${leaderAddress} (${who}) is currently holding a ${coin} ${direction} position. ` +
+    `No reduce has happened yet - this is a test. If Smart Money started exiting ${coin} right now, what ` +
+    `on-chain context would likely explain it? Answer in under 80 words.`
+  );
+}
+
+/** Reply text for the agent's answer: the answer itself, plus which Nansen tools it used (from
+ * the SSE stream's finish event), when there were any. */
+export function formatWhyAnswer(answer: string, tools: string[]): string {
+  const trimmed = answer.trim();
+  if (tools.length === 0) return trimmed;
+  return `${trimmed}\n\nTools used: ${tools.join(", ")}`;
+}
+
+/** Per (leader, coin, hour): the same reduce asked about twice within the same hour reuses the
+ * cached answer instead of spending another Agent call. */
+export function whyCacheKey(leader: string, coin: string, atMs: number): string {
+  return `${leader}:${coin}:${Math.floor(atMs / 3_600_000)}`;
+}

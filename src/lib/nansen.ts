@@ -172,7 +172,7 @@ function rowsOf(json: Json): number | null {
   return Array.isArray(data) ? data.length : null;
 }
 
-async function logCall(entry: Omit<CallLogEntry, "ts">): Promise<void> {
+export async function logCall(entry: Omit<CallLogEntry, "ts">): Promise<void> {
   try {
     await mkdir(path.dirname(callLogPath()), { recursive: true });
     const line: CallLogEntry = { ts: new Date().toISOString(), ...entry };
@@ -220,10 +220,23 @@ export async function readCallLog(): Promise<CallLogEntry[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Raw HTTP: auth header, 429/5xx backoff (max 3 retries).
+// Raw HTTP: auth header, 60s per-attempt timeout, retry on status 0 (network/timeout), 429 or
+// 5xx up to 2x with backoff, plus a global cap on how many calls are ever in flight together.
 // ---------------------------------------------------------------------------
 
 export class NansenAuthError extends Error {}
+
+/** All retries exhausted against a transient condition (network timeout, persistent 429/5xx).
+ * The caller never sees a bare thrown Error or a silently empty/null result for this case -
+ * route handlers match on this type and answer 503 rather than 502 or a fabricated empty report. */
+export class NansenTimeoutError extends Error {
+  retryAfterSec: number;
+  constructor(endpoint: string, detail: string, retryAfterSec = 5) {
+    super(`Nansen ${endpoint} timed out after retries: ${detail}`);
+    this.name = "NansenTimeoutError";
+    this.retryAfterSec = retryAfterSec;
+  }
+}
 
 interface RequestOptions {
   method?: "GET" | "POST";
@@ -244,6 +257,30 @@ function rateLimitRemainingOf(headers: Headers): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const PER_CALL_TIMEOUT_MS = 60_000;
+
+/** Global cap on Nansen calls actually in flight at once, independent of per-endpoint retry
+ * counts: a burst of parallel wallet reports on /me must not open dozens of sockets at once,
+ * which is what turned late, honest 429s into hung sockets that failed as status 0. */
+const MAX_INFLIGHT = 3;
+let activeCalls = 0;
+const waitQueue: (() => void)[] = [];
+
+async function acquireSlot(): Promise<() => void> {
+  if (activeCalls >= MAX_INFLIGHT) {
+    await new Promise<void>((resolve) => waitQueue.push(resolve));
+  }
+  activeCalls++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeCalls--;
+    const next = waitQueue.shift();
+    if (next) next();
+  };
+}
+
 async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Promise<RawFetchResult> {
   const key = process.env.NANSEN_API_KEY;
   if (!key) {
@@ -255,40 +292,64 @@ async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Pro
   let url = `https://api.nansen.ai/api/v1/${endpoint}`;
   if (opts.query) url += `?${new URLSearchParams(opts.query).toString()}`;
 
-  const maxAttempts = opts.retries ?? 3;
+  const maxAttempts = opts.retries ?? 2;
   let lastError: Error = new Error(`Nansen ${endpoint} failed`);
-  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
-    const res = await fetch(url, {
-      method,
-      headers: { apikey: key, "Content-Type": "application/json" },
-      body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
-    });
+  let lastRetryAfterSec = 5;
 
-    if (res.status === 429 || res.status >= 500) {
-      const text = await res.text().catch(() => "");
-      lastError = new Error(`Nansen ${endpoint} ${res.status}: ${text}`);
-      if (attempt === maxAttempts) throw lastError;
-      const resetHeader =
-        res.headers.get("Retry-After") ??
-        res.headers.get("RateLimit-Reset") ??
-        res.headers.get("X-RateLimit-Reset");
-      const parsed = resetHeader ? Number(resetHeader) : NaN;
-      const waitMs = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed * 1000, 15_000) : 1000 * 2 ** attempt;
-      await new Promise((r) => setTimeout(r, Math.max(waitMs, 250)));
-      continue;
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      if (res.status === 401 || res.status === 403) {
-        throw new NansenAuthError(`Nansen auth failed (${res.status}): ${text}`);
+  const release = await acquireSlot();
+  try {
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PER_CALL_TIMEOUT_MS);
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method,
+          headers: { apikey: key, "Content-Type": "application/json" },
+          body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        const aborted = err instanceof Error && err.name === "AbortError";
+        lastError = aborted
+          ? new Error(`timeout after ${PER_CALL_TIMEOUT_MS}ms`)
+          : new Error(`network error: ${err instanceof Error ? err.message : String(err)}`);
+        if (attempt === maxAttempts) throw new NansenTimeoutError(endpoint, lastError.message, lastRetryAfterSec);
+        await new Promise((r) => setTimeout(r, Math.max(1000 * 2 ** attempt, 250)));
+        continue;
+      } finally {
+        clearTimeout(timer);
       }
-      throw new Error(`Nansen ${endpoint} ${res.status}: ${text}`);
-    }
 
-    return { json: await res.json(), status: res.status, rateLimitRemaining: rateLimitRemainingOf(res.headers) };
+      if (res.status === 429 || res.status >= 500) {
+        const text = await res.text().catch(() => "");
+        lastError = new Error(`${res.status}: ${text}`);
+        const resetHeader =
+          res.headers.get("Retry-After") ??
+          res.headers.get("RateLimit-Reset") ??
+          res.headers.get("X-RateLimit-Reset");
+        const parsed = resetHeader ? Number(resetHeader) : NaN;
+        lastRetryAfterSec = Number.isFinite(parsed) && parsed > 0 ? parsed : lastRetryAfterSec;
+        if (attempt === maxAttempts) throw new NansenTimeoutError(endpoint, lastError.message, lastRetryAfterSec);
+        const waitMs = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed * 1000, 15_000) : 1000 * 2 ** attempt;
+        await new Promise((r) => setTimeout(r, Math.max(waitMs, 250)));
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        if (res.status === 401 || res.status === 403) {
+          throw new NansenAuthError(`Nansen auth failed (${res.status}): ${text}`);
+        }
+        throw new Error(`Nansen ${endpoint} ${res.status}: ${text}`);
+      }
+
+      return { json: await res.json(), status: res.status, rateLimitRemaining: rateLimitRemainingOf(res.headers) };
+    }
+    throw lastError;
+  } finally {
+    release();
   }
-  throw lastError;
 }
 
 // ---------------------------------------------------------------------------

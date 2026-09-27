@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   alarmsForChat,
   bindCode,
+  buildWhyQuestion,
+  buildWhyTestQuestion,
   createAlarmRecord,
   distinctLeaderCount,
   dropWatch,
@@ -11,6 +13,7 @@ import {
   formatOnboardingMessage,
   formatProtectionLine,
   formatTestMessage,
+  formatWhyAnswer,
   markHeld,
   ownerStillHolds,
   pruneRecent,
@@ -21,6 +24,7 @@ import {
   shouldFire,
   smartAlertIdsForChat,
   unbindChat,
+  whyCacheKey,
   type AlarmStore,
   type RecentReduce,
   type Watch,
@@ -316,6 +320,7 @@ describe("readExitDna", () => {
       unrealizedPnlUsd: null,
       episodes: [],
       exitDna,
+      alarmReplay: null,
       openPositions: [],
       nansenCalls: 0,
       backtestEligible: 0,
@@ -489,5 +494,71 @@ describe("smart alert store helpers", () => {
     const c = { ...createAlarmRecord("0xowner", [watch({ coin: "SOL" })]), chatId: 999, smartAlerts: { SOL: "alert-3" } };
     const s: AlarmStore = { [a.code]: a, [b.code]: b, [c.code]: c };
     expect(smartAlertIdsForChat(s, 555).sort()).toEqual(["alert-1", "alert-2"]);
+  });
+});
+
+describe("buildWhyQuestion", () => {
+  it("renders the exact literal template for a real reduce", () => {
+    const q = buildWhyQuestion({
+      leaderAddress: "0xleader",
+      leaderLabel: "Leader One",
+      coin: "STRK",
+      direction: "long",
+      pctClosed: 42.6,
+      usdValue: 123_456.7,
+      atMs: Date.UTC(2026, 0, 15, 10, 30, 0),
+    });
+    expect(q).toBe(
+      "Hyperliquid wallet 0xleader (Leader One) just reduced its STRK long by 43% (~$123,457) at 2026-01-15T10:30:00.000Z. " +
+        "What on-chain context explains Smart Money exiting STRK right now? Answer in under 80 words.",
+    );
+  });
+
+  it("falls back to a shortened address when there is no label", () => {
+    const q = buildWhyQuestion({
+      leaderAddress: "0x1234567890abcdef",
+      leaderLabel: null,
+      coin: "ETH",
+      direction: "short",
+      pctClosed: 100,
+      usdValue: 0,
+      atMs: 0,
+    });
+    expect(q).toContain("(0x1234…cdef)");
+  });
+});
+
+describe("buildWhyTestQuestion", () => {
+  it("never claims a reduce happened", () => {
+    const q = buildWhyTestQuestion({ leaderAddress: "0xleader", leaderLabel: "Leader One", coin: "STRK", direction: "long" });
+    expect(q).not.toContain("just reduced");
+    expect(q).toContain("No reduce has happened yet - this is a test.");
+    expect(q).toContain("STRK long");
+  });
+});
+
+describe("formatWhyAnswer", () => {
+  it("appends the tools list when tools were used", () => {
+    const msg = formatWhyAnswer(" Smart Money rotated into ETH. ", ["token-god-mode", "smart-money-netflow"]);
+    expect(msg).toBe("Smart Money rotated into ETH.\n\nTools used: token-god-mode, smart-money-netflow");
+  });
+
+  it("returns just the trimmed answer when no tools were used", () => {
+    expect(formatWhyAnswer(" No tools needed. ", [])).toBe("No tools needed.");
+  });
+});
+
+describe("whyCacheKey", () => {
+  it("is stable within the same hour and changes across an hour boundary", () => {
+    const hourMs = 3_600_000;
+    const base = Date.UTC(2026, 0, 15, 10, 0, 0);
+    expect(whyCacheKey("0xleader", "STRK", base)).toBe(whyCacheKey("0xleader", "STRK", base + hourMs - 1));
+    expect(whyCacheKey("0xleader", "STRK", base)).not.toBe(whyCacheKey("0xleader", "STRK", base + hourMs));
+  });
+
+  it("differs by leader and by coin", () => {
+    const at = Date.UTC(2026, 0, 15, 10, 0, 0);
+    expect(whyCacheKey("0xleaderA", "STRK", at)).not.toBe(whyCacheKey("0xleaderB", "STRK", at));
+    expect(whyCacheKey("0xleader", "STRK", at)).not.toBe(whyCacheKey("0xleader", "ETH", at));
   });
 });
