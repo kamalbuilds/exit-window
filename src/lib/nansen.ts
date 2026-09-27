@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Direction, Fill, LeaderRow, OpenPosition } from "./types";
+import type { Companion, Direction, Fill, LeaderRow, OpenPosition } from "./types";
 
 // ---------------------------------------------------------------------------
 // Cache: key = endpoint + canonical JSON body. Memory -> disk -> committed seed -> network.
@@ -31,6 +31,7 @@ const TTL_MS: Record<string, number> = {
   "perp-leaderboard": 6 * 60 * 60_000,
   "smart-money/perp-trades": 5 * 60_000,
   "profiler/perp-positions": 30_000,
+  "tgm/perp-positions": 10 * 60_000,
 };
 
 function ttlFor(endpoint: string): number | null {
@@ -152,6 +153,7 @@ function summarizeRequest(body: Json, query?: Record<string, string>): Record<st
   const address = b.address ?? b.wallet_address ?? q.wallet_address ?? q.address;
   if (typeof address === "string") out.address = address;
   if (typeof b.coin === "string") out.coin = b.coin;
+  if (typeof b.token_symbol === "string") out.tokenSymbol = b.token_symbol;
   if (b.date && typeof b.date === "object") out.date = b.date;
   if (typeof b.lookback_hours === "number") out.lookbackHours = b.lookback_hours;
   return out;
@@ -250,7 +252,7 @@ async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Pro
 // stale-while-error fallback. Trading/live-account endpoints (ttl null) always hit network.
 // ---------------------------------------------------------------------------
 
-async function nansenCall<T>(
+export async function nansenCall<T>(
   endpoint: string,
   body: Json,
   parse: (j: Json) => T,
@@ -518,6 +520,40 @@ export async function fetchSmartMoneyPerpTrades(
           priceUsd: Number(r.price_usd ?? 0),
           valueUsd: Number(r.value_usd ?? 0),
           at: Date.parse(String(r.block_timestamp ?? "")),
+        }),
+      );
+    },
+  );
+}
+
+/** Labeled wallets (smart money) currently holding `coin` on `side`, for the overlap feature:
+ * "who else is in this trade." Point-in-time snapshot, no date range - cached 10 min per
+ * (coin, side) since the cache key is the full canonicalized request body. */
+export async function fetchTgmPerpPositions(
+  coin: string,
+  side: "Long" | "Short",
+  perPage = 10,
+): Promise<CachedResult<Companion[]>> {
+  return nansenCall(
+    "tgm/perp-positions",
+    {
+      token_symbol: coin,
+      label_type: "smart_money",
+      pagination: { page: 1, per_page: perPage },
+      filters: { side },
+      order_by: [{ field: "position_value_usd", direction: "DESC" }],
+    },
+    (j) => {
+      const data = (j as { data?: Record<string, unknown>[] }).data ?? [];
+      return data.map(
+        (r): Companion => ({
+          address: String(r.address ?? ""),
+          label: (r.address_label as string) || null,
+          positionValueUsd: Number(r.position_value_usd ?? 0),
+          size: Math.abs(Number(r.position_size ?? 0)),
+          entryPx: Number(r.entry_price ?? 0),
+          upnlUsd: r.upnl_usd !== undefined ? Number(r.upnl_usd) : null,
+          leverage: r.leverage !== undefined ? Number(r.leverage) : null,
         }),
       );
     },
