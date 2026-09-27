@@ -84,9 +84,12 @@ export async function buildReport(address: string, options: BuildReportOptions =
 
   const callsBefore = currentNetworkCallCount();
 
-  const now = new Date();
-  const from = new Date(now.getTime() - lookbackDays * 86_400_000).toISOString();
-  const to = now.toISOString();
+  // Snap the range to a 30-minute bucket: the Nansen cache is keyed on the request body,
+  // so a millisecond `to` would make every request a fresh, paid network call.
+  const BUCKET_MS = 30 * 60_000;
+  const nowMs = Math.floor(Date.now() / BUCKET_MS) * BUCKET_MS;
+  const from = new Date(nowMs - lookbackDays * 86_400_000).toISOString();
+  const to = new Date(nowMs).toISOString();
 
   const [fills, pnlSummary, positions] = await Promise.all([
     fetchAllFills(address, from, to),
