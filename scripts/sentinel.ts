@@ -6,7 +6,7 @@
 // `--sweeps N` (used for a bounded local test run).
 import { diffPositions } from "@/lib/follow";
 import { dexPrefix, fetchClearinghouseState, fetchMidsForDex } from "@/lib/hyperliquid";
-import { appendEvents, buildEvent, loadWatchlistFromDisk, type LiveExitEvent, type WatchlistEntry } from "@/lib/sentinel";
+import { appendEvents, buildEvent, loadWatchlistFromDisk, writeSnapshot, type LiveExitEvent, type WatchlistEntry } from "@/lib/sentinel";
 import type { OpenPosition } from "@/lib/types";
 
 const SWEEP_MS = 60_000;
@@ -80,6 +80,13 @@ async function sweep(watchlist: WatchlistEntry[]): Promise<void> {
   }
 
   if (newEvents.length > 0) await appendEvents(newEvents);
+  await writeSnapshot({
+    at: Date.now(),
+    wallets: watchlist.flatMap((w) => {
+      const positions = snapshots.get(w.address);
+      return positions ? [{ address: w.address, label: w.label, positions }] : [];
+    }),
+  }).catch((err) => console.error(`sentinel: snapshot write failed: ${err instanceof Error ? err.message : err}`));
 
   sweepCount++;
   console.log(

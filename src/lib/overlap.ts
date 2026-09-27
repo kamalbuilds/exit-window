@@ -2,7 +2,8 @@
 // wallets holding the same coin and side, so "who else is in this trade" is a single call.
 // No wallet reports are built here - the UI opens /api/wallet/[addr] per companion on demand,
 // which is already cached.
-import { attachMarkPrices, fetchClearinghouseState, fetchPositionOnCoin } from "./hyperliquid";
+import { attachMarkPrices, dexPrefix, fetchClearinghouseState, fetchMidsForDex, fetchPositionOnCoin } from "./hyperliquid";
+import { holdersFromSnapshot, readSnapshot } from "./sentinel";
 import { fetchAddressLabels, fetchTgmPerpPositions, findAnyAgeCache, NansenCreditsError, type RawCompanion } from "./nansen";
 import type { Companion, OpenPosition, OverlapRow } from "./types";
 
@@ -75,7 +76,16 @@ async function fetchCompanionsDegradeAware(
             }
           : null,
     );
-    return fallback?.data ?? [];
+    if (fallback?.data.length) return fallback.data;
+    if (labelType !== "smart_money") return [];
+    // Never cached: the sentinel's last sweep of the Nansen-labeled watchlist, read live from Hyperliquid.
+    const snapshot = await readSnapshot();
+    if (!snapshot) return [];
+    const markPx = (await fetchMidsForDex(dexPrefix(coin)).catch(() => ({}) as Record<string, number>))[coin] ?? null;
+    return holdersFromSnapshot(snapshot, coin, side === "Long" ? "long" : "short", markPx, FETCH_COMPANIONS).map((h) => ({
+      ...h,
+      cohort: "smart_money" as const,
+    }));
   }
 }
 

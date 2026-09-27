@@ -1,6 +1,6 @@
 // Hyperliquid public info API. No key required, no credits, no rate-limit budget to protect -
 // so this client is plain fetch with no cache layer of its own.
-import type { Direction, OpenPosition } from "./types";
+import type { Direction, Fill, OpenPosition } from "./types";
 
 export type CandleInterval = "1m" | "5m" | "15m" | "1h";
 
@@ -160,4 +160,44 @@ export async function fetchPositionOnCoin(address: string, coin: string): Promis
 export async function fetchClearinghouseState(address: string): Promise<OpenPosition[]> {
   const perDex = await Promise.all(CLEARINGHOUSE_DEXES.map((dex) => fetchClearinghouseForDex(address, dex)));
   return perDex.flat();
+}
+
+const FILLS_PAGE = 2000; // userFillsByTime's per-response cap
+
+/** A wallet's own fills in [fromMs, toMs] from Hyperliquid's userFillsByTime: the same rows
+ * Nansen's profiler/perp-trades serves, read from the system of record. Pages forward by time
+ * until a short page. Used when Nansen credits are exhausted so a never-seen wallet still gets a
+ * real report instead of an empty one. */
+export async function fetchUserFills(address: string, fromMs: number, toMs: number): Promise<Fill[]> {
+  const out: Fill[] = [];
+  let start = fromMs;
+  for (;;) {
+    const res = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "userFillsByTime", user: address, startTime: start, endTime: toMs }),
+    });
+    if (!res.ok) throw new Error(`Hyperliquid userFillsByTime ${res.status}`);
+    const rows = (await res.json()) as {
+      coin: string; px: string; sz: string; side: "B" | "A"; time: number; startPosition: string;
+      closedPnl: string; hash: string; oid: number; fee: string;
+    }[];
+    for (const r of rows) {
+      out.push({
+        t: r.time,
+        coin: r.coin,
+        isBuy: r.side === "B",
+        px: Number(r.px),
+        sz: Math.abs(Number(r.sz)),
+        startPosition: Number(r.startPosition),
+        closedPnl: Number(r.closedPnl),
+        feeUsd: Number(r.fee),
+        hash: r.hash,
+        oid: r.oid,
+      });
+    }
+    if (rows.length < FILLS_PAGE) break;
+    start = rows[rows.length - 1].time + 1;
+  }
+  return out.sort((a, b) => a.t - b.t);
 }

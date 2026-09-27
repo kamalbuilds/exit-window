@@ -1,6 +1,6 @@
 // Assembles a WalletReport: fetch fills + pnl + positions, build episodes, measure exit windows,
 // backtest the latency tax, and settle on a verdict. This is the one call the UI needs per wallet.
-import { attachMarkPrices, fetchCandles, fetchClearinghouseState, intervalForAge, type Candle } from "./hyperliquid";
+import { attachMarkPrices, fetchCandles, fetchClearinghouseState, fetchUserFills, intervalForAge, type Candle } from "./hyperliquid";
 import {
   fetchPerpTrades,
   fetchPerpPositions,
@@ -89,8 +89,14 @@ async function fetchAllFills(address: string, from: string, to: string): Promise
       return true;
     } catch (err) {
       if (!(err instanceof NansenCreditsError)) throw err;
-      degraded = true;
-      return false;
+      // Out of credits: the same fills straight from Hyperliquid. Only a failure there degrades.
+      try {
+        fetched.push(...(await fetchUserFills(address, Date.parse(rangeFrom), Date.parse(rangeTo))));
+        return true;
+      } catch {
+        degraded = true;
+        return false;
+      }
     }
   }
 

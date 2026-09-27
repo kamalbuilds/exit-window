@@ -3,10 +3,10 @@
 // on disk (smart-money/perp-trades, perp-leaderboard, tgm/perp-positions); Hyperliquid's public
 // clearinghouseState (free, no key) supplies the live "when did they move" signal that Nansen's
 // own feed can no longer provide once its credits run out.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FeedItem } from "@/components/feed";
-import type { Direction, PositionChange } from "./types";
+import type { Direction, OpenPosition, PositionChange } from "./types";
 
 // ---------------------------------------------------------------------------
 // Watchlist: address + label + when it was last seen labeled, built from stored Nansen JSON.
@@ -208,6 +208,59 @@ export async function appendEvents(events: LiveExitEvent[]): Promise<LiveExitEve
   const combined = trimEvents([...(await readEvents()), ...events]);
   await writeFile(EVENTS_PATH, `${combined.map((e) => JSON.stringify(e)).join("\n")}\n`);
   return combined;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot: every watched wallet's open positions as of the last sweep, data/sentinel-positions.json.
+// Lets overlap.ts answer "which Nansen-labeled wallets are in this trade" with no Nansen call.
+// ---------------------------------------------------------------------------
+
+export const SNAPSHOT_PATH = path.join(process.cwd(), "data", "sentinel-positions.json");
+
+export interface SentinelSnapshot {
+  at: number;
+  wallets: { address: string; label: string | null; positions: OpenPosition[] }[];
+}
+
+export async function writeSnapshot(snapshot: SentinelSnapshot): Promise<void> {
+  await mkdir(path.dirname(SNAPSHOT_PATH), { recursive: true });
+  const tmp = `${SNAPSHOT_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(snapshot));
+  await rename(tmp, SNAPSHOT_PATH);
+}
+
+export async function readSnapshot(): Promise<SentinelSnapshot | null> {
+  try {
+    return JSON.parse(await readFile(SNAPSHOT_PATH, "utf8")) as SentinelSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+/** Watched wallets holding `coin` on `direction`, largest first, in tgm/perp-positions' shape.
+ * markPx prices the position; entryPx stands in when the coin has no live mid. */
+export function holdersFromSnapshot(
+  snapshot: SentinelSnapshot,
+  coin: string,
+  direction: Direction,
+  markPx: number | null,
+  limit: number,
+): { address: string; label: string | null; positionValueUsd: number; size: number; entryPx: number; upnlUsd: number | null; leverage: number | null }[] {
+  const out = [];
+  for (const w of snapshot.wallets) {
+    const p = w.positions.find((x) => x.coin === coin && x.direction === direction);
+    if (!p || p.size <= 0) continue;
+    out.push({
+      address: w.address,
+      label: w.label,
+      positionValueUsd: p.size * (markPx ?? p.entryPx),
+      size: p.size,
+      entryPx: p.entryPx,
+      upnlUsd: p.unrealizedPnlUsd,
+      leverage: p.leverage,
+    });
+  }
+  return out.sort((a, b) => b.positionValueUsd - a.positionValueUsd).slice(0, limit);
 }
 
 // ---------------------------------------------------------------------------

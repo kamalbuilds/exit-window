@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEvent, buildWatchlist, mergeFeed, trimEvents, type CacheFileLike, type LiveExitEvent } from "../src/lib/sentinel";
+import { buildEvent, buildWatchlist, holdersFromSnapshot, mergeFeed, trimEvents, type CacheFileLike, type LiveExitEvent } from "../src/lib/sentinel";
 import type { PositionChange } from "../src/lib/types";
 
 const AT = 1_790_000_000_000;
@@ -143,5 +143,32 @@ describe("mergeFeed", () => {
       { ts: AT + 5_000, address: "0xaaa", label: "HL Perps Whale", coin: "BTC", side: "Long", action: "Reduce", reducedFraction: 0.5, valueUsd: 500, price: 100 },
     ];
     expect(mergeFeed(nansenFeed, liveEvents)).toHaveLength(1);
+  });
+});
+
+describe("holdersFromSnapshot", () => {
+  const pos = (coin: string, direction: "long" | "short", size: number, entryPx: number) => ({
+    coin, direction, size, entryPx, markPx: null, unrealizedPnlUsd: 5, leverage: 3, liquidationPx: null,
+  });
+  const snap = {
+    at: AT,
+    wallets: [
+      { address: "0xa", label: "Smart HL Perps Trader", positions: [pos("ETH", "long", 2, 3000), pos("BTC", "short", 1, 90000)] },
+      { address: "0xb", label: null, positions: [pos("ETH", "long", 10, 2900)] },
+      { address: "0xc", label: "Fund", positions: [pos("ETH", "short", 50, 3100)] },
+    ],
+  };
+
+  it("keeps only the coin and side asked for, valued at mark, largest first", () => {
+    const out = holdersFromSnapshot(snap, "ETH", "long", 3500, 8);
+    expect(out.map((h) => h.address)).toEqual(["0xb", "0xa"]);
+    expect(out[0].positionValueUsd).toBe(35000);
+    expect(out[1].label).toBe("Smart HL Perps Trader");
+  });
+
+  it("values at entry when there is no mark, and honours the limit", () => {
+    const out = holdersFromSnapshot(snap, "ETH", "long", null, 1);
+    expect(out).toHaveLength(1);
+    expect(out[0].positionValueUsd).toBe(29000);
   });
 });
