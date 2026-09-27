@@ -1,5 +1,18 @@
 // Formatting helpers owned by lane U. Pure functions, no API calls.
 
+import type { Companion } from "@/lib/types";
+
+/** overlap.ts already resolves displayLabel server-side (junk labels like "High Balance" or a
+ * referral code become a cohort fallback such as "Smart Money wallet"); fall back to the raw
+ * label defensively in case an older payload doesn't carry it yet. */
+export function companionLabel(c: Companion & { displayLabel?: string | null }): string {
+  return c.displayLabel || c.label || "Unlabeled";
+}
+
+export function cohortLabel(cohort: Companion["cohort"]): string {
+  return cohort === "smart_money" ? "smart money" : cohort === "whale" ? "whale" : "public figure";
+}
+
 export function shortAddr(address: string): string {
   if (address.length <= 10) return address;
   return `${address.slice(0, 6)}…${address.slice(-4)}`;

@@ -2,11 +2,32 @@
 
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
-import type { AlarmCreated, Companion, OverlapRow, WalletReport } from "@/lib/types";
+import type { AlarmCreated, Companion, OverlapRow } from "@/lib/types";
 import { Chronograph } from "@/components/Chronograph";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
-import { formatMinutes, formatUsd, shortAddr } from "@/components/format";
+import { cohortLabel, companionLabel, formatMinutes, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
+import { useQueuedWalletReport, type QueuedWalletState } from "@/components/walletQueue";
+
+/** Renders a queued wallet report's timing status. Never "no window": that phrase is reserved for
+ * a real medianWindowMin===null; a failed or in-flight fetch says so instead. */
+function windowStatusText(q: QueuedWalletState): string {
+  if (q.status === "queued" || q.status === "loading") return "timing";
+  if (q.status === "retrying") return `Nansen timed out, retrying in ${q.retryAfterSec ?? 5}s`;
+  if (q.status === "error") return q.error ?? "timing failed";
+  return q.data?.medianWindowMin != null ? formatMinutes(q.data.medianWindowMin) : "no exit measured in 30 days";
+}
+
+/** Full sentence for the position headline; the duration case reads "you have <window>.", every
+ * other status gets its own grammar instead of being forced into that template. */
+function windowSentence(q: QueuedWalletState): string {
+  if (q.status === "queued" || q.status === "loading") return "Still timing when they'd sell.";
+  if (q.status === "retrying") return `Nansen timed out, retrying in ${q.retryAfterSec ?? 5}s.`;
+  if (q.status === "error") return `${q.error ?? "Timing failed"}.`;
+  return q.data?.medianWindowMin != null
+    ? `When they sell, you have ${formatMinutes(q.data.medianWindowMin)}.`
+    : "No exit measured in 30 days.";
+}
 
 interface Cohort {
   available: boolean;
@@ -39,6 +60,18 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
   const { address } = use(params);
   const overlap = usePoll<OverlapRow[]>(`/api/overlap/${address}`, 0);
   const rows = useMemo(() => overlap.data ?? [], [overlap.data]);
+  // Worst entry gap first: the position where the user paid the most above Smart Money leads.
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const ga = entryGapPct(a);
+      const gb = entryGapPct(b);
+      if (ga === null && gb === null) return 0;
+      if (ga === null) return 1;
+      if (gb === null) return -1;
+      return gb - ga;
+    });
+  }, [rows]);
+  const worseCount = useMemo(() => rows.filter((r) => (entryGapPct(r) ?? 0) > 0.05).length, [rows]);
   const [watch, setWatch] = useState<Set<WatchKey> | null>(null);
 
   // Default: watch the three largest companions of every position.
@@ -57,7 +90,7 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
     });
 
   return (
-    <main className="mx-auto w-full max-w-[1320px] px-4 sm:px-8 flex-1 pb-16">
+    <main className={`mx-auto w-full max-w-[1320px] px-4 sm:px-8 flex-1 ${rows.length > 0 ? "pb-40" : "pb-16"}`}>
       <nav className="pt-6 text-[13px]">
         <Link href="/" className="text-ink-2 underline decoration-rule hover:decoration-ink">
           Exit Window
@@ -68,7 +101,11 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
 
       <header className="pt-6 pb-8 border-b border-ink grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-8 items-end">
         <div className="lg:col-span-8">
-          <h1 className="display text-[clamp(34px,5vw,56px)]">Who else is in your trades, and how fast they get out.</h1>
+          <h1 className="display text-[clamp(34px,5vw,56px)]">
+            {rows.length === 0
+              ? "Who else is in your trades, and how fast they get out."
+              : `${worseCount} of your ${rows.length} position${rows.length === 1 ? "" : "s"} ${worseCount === 1 ? "was" : "were"} bought above the Smart Money in ${worseCount === 1 ? "it" : "them"}.`}
+          </h1>
           <p className="mt-4 text-[17px] text-ink-2 max-w-[60ch]">
             For every position you hold, these are the Smart Money wallets on the same side, from Nansen. When one of them starts
             selling, you get a Telegram message with how long its exits usually leave a holder.
@@ -95,7 +132,7 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
       ) : (
         <>
           <ol className="mt-2">
-            {rows.map((r) => (
+            {sortedRows.map((r) => (
               <TradeBand key={`${r.coin}-${r.direction}`} row={r} active={active} onToggle={toggle} />
             ))}
           </ol>
@@ -108,12 +145,13 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
 
 function TradeBand({ row, active, onToggle }: { row: OverlapRow; active: Set<WatchKey>; onToggle: (k: WatchKey) => void }) {
   const top = row.companions[0] ?? null;
-  const topReport = usePoll<WalletReport>(top ? `/api/wallet/${top.address}` : null, 0);
+  // Auto-timed: the largest holder is always in the shared, one-at-a-time page queue.
+  const topWindow = useQueuedWalletReport(top ? top.address : null);
   const pnl = row.markPx !== null ? (row.direction === "long" ? row.markPx - row.entryPx : row.entryPx - row.markPx) * row.size : null;
 
   return (
     <li className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-x-10 gap-y-6 py-8 border-b border-ink">
-      <TradeHeadline row={row} />
+      <TradeHeadline row={row} topWindow={top ? topWindow : null} />
       <div className="lg:col-span-3">
         <p className="label">You hold</p>
         <p className="mt-1 flex items-baseline gap-2">
@@ -138,8 +176,16 @@ function TradeBand({ row, active, onToggle }: { row: OverlapRow; active: Set<Wat
           <p className="text-[14px] text-ink-2 border-t border-ink pt-3">No labeled wallet holds {row.coin} {row.direction} right now. Nothing to watch here.</p>
         ) : (
           <ol className="border-t border-ink">
-            {row.companions.map((c) => (
-              <CompanionRow key={c.address} c={c} row={row} checked={active.has(key(c.address, row))} onToggle={() => onToggle(key(c.address, row))} report={c.address === top?.address ? topReport.data : null} />
+            {row.companions.map((c, i) => (
+              <CompanionRow
+                key={c.address}
+                c={c}
+                row={row}
+                index={i}
+                checked={active.has(key(c.address, row))}
+                onToggle={() => onToggle(key(c.address, row))}
+                autoReport={i === 0 ? topWindow : undefined}
+              />
             ))}
           </ol>
         )}
@@ -149,13 +195,11 @@ function TradeBand({ row, active, onToggle }: { row: OverlapRow; active: Set<Wat
         {top ? (
           <Chronograph
             size={260}
-            windowMin={topReport.data ? topReport.data.medianWindowMin : undefined}
-            title={`${top.label ?? shortAddr(top.address)} median exit window`}
+            windowMin={topWindow.status === "ready" ? (topWindow.data?.medianWindowMin ?? null) : undefined}
+            title={`${companionLabel(top)} median exit window`}
           >
             <span className="label">largest holder</span>
-            <span className="display text-[24px] leading-none mt-1">
-              {topReport.loading ? "timing" : topReport.data?.medianWindowMin != null ? formatMinutes(topReport.data.medianWindowMin) : "no window"}
-            </span>
+            <span className="display text-[24px] leading-none mt-1">{windowStatusText(topWindow)}</span>
           </Chronograph>
         ) : null}
       </div>
@@ -163,28 +207,47 @@ function TradeBand({ row, active, onToggle }: { row: OverlapRow; active: Set<Wat
   );
 }
 
-function CompanionRow({ c, row, checked, onToggle, report }: { c: Companion; row: OverlapRow; checked: boolean; onToggle: () => void; report: WalletReport | null }) {
+function CompanionRow({
+  c,
+  row,
+  index,
+  checked,
+  onToggle,
+  autoReport,
+}: {
+  c: Companion;
+  row: OverlapRow;
+  index: number;
+  checked: boolean;
+  onToggle: () => void;
+  /** The top holder's queued report is already fetched by the parent for the dial; reuse it. */
+  autoReport?: QueuedWalletState;
+}) {
+  const auto = index < 2;
   const [timed, setTimed] = useState(false);
-  const own = usePoll<WalletReport>(timed && !report ? `/api/wallet/${c.address}` : null, 0);
-  const r = report ?? own.data;
+  // Top 2 companions time automatically through the shared queue; the rest need the button.
+  const secondAuto = useQueuedWalletReport(index === 1 ? c.address : null);
+  const manual = useQueuedWalletReport(!auto && timed ? c.address : null);
+  const q = index === 0 ? autoReport : index === 1 ? secondAuto : timed ? manual : null;
   const id = `watch-${row.coin}-${c.address}`;
   return (
-    <li className="grid grid-cols-[1.5rem_minmax(0,1fr)_auto_6rem] items-center gap-3 py-2.5 border-b border-rule">
+    <li className="grid grid-cols-[1.5rem_minmax(0,1fr)_auto_9rem] items-center gap-3 py-2.5 border-b border-rule">
       <input id={id} type="checkbox" checked={checked} onChange={onToggle} className="w-4 h-4 accent-[var(--color-ink)]" />
       <label htmlFor={id} className="min-w-0 truncate cursor-pointer">
-        <span className="text-[14px] text-ink">{c.label ?? "Unlabeled"}</span>{" "}
+        <span className="text-[14px] text-ink">{companionLabel(c)}</span>{" "}
+        <span className="text-[11px] text-ink-3 uppercase tracking-[0.06em]">{cohortLabel(c.cohort)}</span>{" "}
         <Link href={`/w/${c.address}`} className="fig text-[12px] text-ink-3 underline decoration-rule hover:decoration-ink">
           {shortAddr(c.address)}
         </Link>
       </label>
       <span className="fig text-[13px] text-ink-2 text-right">{formatUsd(c.positionValueUsd)}</span>
       <span className="text-right">
-        {r ? (
-          <span className={`fig text-[13px] ${r.medianWindowMin !== null && r.medianWindowMin < 15 ? "text-late" : "text-ink"}`}>
-            {r.medianWindowMin === null ? "no window" : formatMinutes(r.medianWindowMin)}
+        {q ? (
+          <span
+            className={`fig text-[12px] ${q.status === "error" ? "text-late" : q.status === "ready" && q.data?.medianWindowMin !== null && q.data !== null && q.data.medianWindowMin < 15 ? "text-late" : "text-ink-2"}`}
+          >
+            {windowStatusText(q)}
           </span>
-        ) : own.loading && timed ? (
-          <span className="text-[12px] text-ink-3">timing</span>
         ) : (
           <button onClick={() => setTimed(true)} className="text-[12px] text-ink-2 underline decoration-rule hover:decoration-ink">
             time it
@@ -221,8 +284,8 @@ function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; 
   }
 
   return (
-    <section className="sticky bottom-0 mt-10 -mx-4 sm:-mx-8 px-4 sm:px-8 py-4 bg-bezel border-t border-ink" aria-label="Telegram alarm">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+    <section className="fixed inset-x-0 bottom-0 z-10 bg-bezel border-t border-ink" aria-label="Telegram alarm">
+      <div className="mx-auto w-full max-w-[1320px] px-4 sm:px-8 py-4 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
         <p className="text-[15px] text-ink">
           <span className="fig">{watches.length}</span> wallet{watches.length === 1 ? "" : "s"} across <span className="fig">{new Set(watches.map((w) => w.coin)).size}</span> of your
           positions. The alarm fires the moment one of them reduces.
@@ -255,7 +318,7 @@ function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; 
         )}
       </div>
       {state.status === "error" && (
-        <p role="alert" className="mt-2 text-[13px] text-late">
+        <p role="alert" className="mx-auto w-full max-w-[1320px] px-4 sm:px-8 pb-3 -mt-2 text-[13px] text-late">
           {state.error}
         </p>
       )}
@@ -263,11 +326,13 @@ function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; 
   );
 }
 
-function TradeHeadline({ row }: { row: OverlapRow }) {
+function TradeHeadline({ row, topWindow }: { row: OverlapRow; topWindow: QueuedWalletState | null }) {
   const gap = entryGapPct(row);
   const side = row.direction === "long" ? "long" : "short";
+  const dirWord = row.direction === "long" ? "above" : "below";
   const pressure = usePoll<Pressure>(row.companions.length ? `/api/intel/pressure/${encodeURIComponent(row.coin)}?side=${side}` : null, 0);
   const p = pressure.data;
+  const windowClause = topWindow ? <> <span className="fig">{windowSentence(topWindow)}</span></> : null;
   return (
     <div className="lg:col-span-12 flex flex-col md:flex-row md:items-baseline md:justify-between gap-2">
       <p className="display text-[clamp(24px,3vw,34px)]">
@@ -275,11 +340,12 @@ function TradeHeadline({ row }: { row: OverlapRow }) {
           <>No Smart Money entry to compare your {row.coin} {side} against.</>
         ) : gap > 0.05 ? (
           <>
-            You {row.direction === "long" ? "bought" : "shorted"} <span className="text-late">{gap.toFixed(1)}% worse</span> than the Smart Money in this trade.
+            You {row.direction === "long" ? "bought" : "shorted"} {row.coin}{" "}
+            <span className="text-late">{gap.toFixed(1)}% {dirWord} Smart Money</span>.{windowClause}
           </>
         ) : gap < -0.05 ? (
           <>
-            You got into {row.coin} <span className="text-lume">{Math.abs(gap).toFixed(1)}% better</span> than the Smart Money in it.
+            You got into {row.coin} <span className="text-lume">{Math.abs(gap).toFixed(1)}% better</span> than the Smart Money in it.{windowClause}
           </>
         ) : (
           <>You entered {row.coin} at the same price as the Smart Money in it.</>
@@ -306,10 +372,13 @@ function CohortBar({ coin }: { coin: string }) {
   const longPct = total > 0 ? (data.smartTraderLongUsd / total) * 100 : 50;
   return (
     <div className="w-full md:w-72">
-      <div className="flex h-1.5 bg-late" role="img" aria-label={data.oneLiner ?? "Smart Trader positioning"}>
+      <div className="flex h-1.5 bg-late" role="img" aria-label={`Smart Traders: ${formatUsd(data.smartTraderLongUsd)} long vs ${formatUsd(data.smartTraderShortUsd)} short`}>
         <span className="h-full bg-lume" style={{ width: `${longPct}%` }} />
       </div>
-      <p className="mt-1 text-[12px] text-ink-3">{data.oneLiner}</p>
+      <p className="mt-1 text-[12px] text-ink-3">
+        Smart Traders: <span className="fig text-ink-2">{formatUsd(data.smartTraderLongUsd)}</span> long vs{" "}
+        <span className="fig text-ink-2">{formatUsd(data.smartTraderShortUsd)}</span> short.
+      </p>
     </div>
   );
 }
