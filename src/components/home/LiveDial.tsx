@@ -22,7 +22,8 @@ function Elapsed({ since }: { since: number }) {
 
 /** The newest real Smart Money reduce, timed live against that wallet's measured median window. */
 export function LiveDial({ exit, loading }: { exit: FeedItem | null; loading: boolean }) {
-  const report = usePoll<WalletReport>(exit ? `/api/wallet/${exit.trader_address}` : null, 0);
+  // Cached reports only: timing every new exiting wallet here would spend ~7 Nansen calls a minute.
+  const report = usePoll<WalletReport>(exit ? `/api/wallet/${exit.trader_address}?cached=1` : null, 0);
   const since = exit ? toMs(exit.timestamp) : null;
   const median = report.data?.medianWindowMin;
   const who = exit ? exit.trader_address_label ?? shortAddr(exit.trader_address) : "";
@@ -43,12 +44,12 @@ export function LiveDial({ exit, loading }: { exit: FeedItem | null; loading: bo
             </span>
             <span className="mt-3 text-[13px] text-ink-2 leading-snug">
               {report.loading
-                ? "Timing this wallet's past exits"
+                ? "Checking this wallet's timed exits"
                 : median != null
                   ? <>its windows close in <span className="fig text-ink">{formatMinutes(median)}</span> (median)</>
                   : report.data
                     ? "no closed window measured yet"
-                    : "window history unavailable"}
+                    : "open the wallet to time its exits"}
             </span>
           </>
         ) : (

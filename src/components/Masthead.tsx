@@ -38,6 +38,9 @@ export function Masthead() {
         </Link>
         <span className="hidden md:inline text-[13px] text-ink-3">Hyperliquid wallets, timed on Nansen data</span>
         <span className="ml-auto flex items-center gap-5">
+          <Link href="/calls" className="hidden sm:inline text-[13px] text-ink-2 underline decoration-rule hover:decoration-ink">
+            Nansen call log
+          </Link>
           {data && (
             <span className="hidden sm:inline fig text-[12px] text-ink-3" title="Nansen API calls served by this server since it started">
               {data.totalNetwork} live · {data.totalCacheHits} cached calls
