@@ -154,7 +154,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
                 <div className="px-4 pt-3 pb-1">
                   <StripAxis />
                 </div>
-                <p className="px-4 pb-2 text-[12px] text-ink-3">Shaded until price moved 1% against a holder. Dots are copier delays: green gets out in time, red arrives after the window closed.</p>
+                <p className="px-4 pb-2 text-[12px] text-ink-3">Green: how long a holder had after this wallet's first reduce, before price moved 1% against them. Ticks under each rail are copier delays, green if they got out in time.</p>
                 <ol>
                   {windows.map((w) => (
                     <ExitStrip key={`${w.coin}-${w.firstReduceAt}`} w={w} openedBefore={before(w)} />
