@@ -8,6 +8,23 @@ import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
 import { formatMinutes, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
 
+interface Pressure {
+  holders: number;
+  reducedLast1h: number;
+  pressure: "low" | "medium" | "high";
+  read: string;
+}
+
+/** Your entry vs the value-weighted Smart Money entry on the same side. Positive = you paid worse. */
+function entryGapPct(row: OverlapRow): number | null {
+  const cs = row.companions.filter((c) => c.entryPx > 0 && c.positionValueUsd > 0);
+  const w = cs.reduce((a, c) => a + c.positionValueUsd, 0);
+  if (!w || row.entryPx <= 0) return null;
+  const sm = cs.reduce((a, c) => a + c.entryPx * c.positionValueUsd, 0) / w;
+  const gap = ((row.entryPx - sm) / sm) * 100;
+  return row.direction === "long" ? gap : -gap;
+}
+
 type WatchKey = string; // `${leader}|${coin}|${direction}`
 const key = (leader: string, row: OverlapRow): WatchKey => `${leader.toLowerCase()}|${row.coin}|${row.direction}`;
 
@@ -89,6 +106,7 @@ function TradeBand({ row, active, onToggle }: { row: OverlapRow; active: Set<Wat
 
   return (
     <li className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-x-10 gap-y-6 py-8 border-b border-ink">
+      <TradeHeadline row={row} />
       <div className="lg:col-span-3">
         <p className="label">You hold</p>
         <p className="mt-1 flex items-baseline gap-2">
@@ -172,10 +190,15 @@ function CompanionRow({ c, row, checked, onToggle, report }: { c: Companion; row
 
 function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; active: Set<WatchKey> }) {
   const [state, setState] = useState<{ status: "idle" | "sending" | "ready" | "error"; link?: string; error?: string }>({ status: "idle" });
+  const [protectPct, setProtectPct] = useState(0);
   const watches = useMemo(
     () =>
-      rows.flatMap((r) => r.companions.filter((c) => active.has(key(c.address, r))).map((c) => ({ leader: c.address, coin: r.coin, direction: r.direction }))),
-    [rows, active],
+      rows.flatMap((r) =>
+        r.companions
+          .filter((c) => active.has(key(c.address, r)))
+          .map((c) => ({ leader: c.address, coin: r.coin, direction: r.direction, ...(protectPct > 0 ? { protect: { reducePct: protectPct } } : {}) })),
+      ),
+    [rows, active, protectPct],
   );
 
   async function create() {
@@ -197,6 +220,19 @@ function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; 
           <span className="fig">{watches.length}</span> wallet{watches.length === 1 ? "" : "s"} across <span className="fig">{new Set(watches.map((w) => w.coin)).size}</span> of your
           positions. The alarm fires the moment one of them reduces.
         </p>
+        <label className="flex items-center gap-2 text-[14px] text-ink-2">
+          When one reduces
+          <select
+            value={protectPct}
+            onChange={(e) => setProtectPct(Number(e.target.value))}
+            className="h-10 px-2 bg-dial border border-ink-3 rounded-[var(--radius-control)] text-ink"
+          >
+            <option value={0}>just alert me</option>
+            <option value={25}>alert and cut my position 25%</option>
+            <option value={50}>alert and cut my position 50%</option>
+            <option value={100}>alert and close my position</option>
+          </select>
+        </label>
         {state.status === "ready" && state.link ? (
           <a href={state.link} target="_blank" rel="noreferrer" className="h-11 px-5 inline-flex items-center bg-late text-dial font-medium rounded-[var(--radius-control)] whitespace-nowrap no-underline transition-[background-color] duration-150 hover:bg-ink">
             Open Telegram to arm it
@@ -217,5 +253,37 @@ function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; 
         </p>
       )}
     </section>
+  );
+}
+
+function TradeHeadline({ row }: { row: OverlapRow }) {
+  const gap = entryGapPct(row);
+  const side = row.direction === "long" ? "long" : "short";
+  const pressure = usePoll<Pressure>(row.companions.length ? `/api/intel/pressure/${encodeURIComponent(row.coin)}?side=${side}` : null, 0);
+  const p = pressure.data;
+  return (
+    <div className="lg:col-span-12 flex flex-col md:flex-row md:items-baseline md:justify-between gap-2">
+      <p className="display text-[clamp(24px,3vw,34px)]">
+        {gap === null ? (
+          <>No Smart Money entry to compare your {row.coin} {side} against.</>
+        ) : gap > 0.05 ? (
+          <>
+            You {row.direction === "long" ? "bought" : "shorted"} <span className="text-late">{gap.toFixed(1)}% worse</span> than the Smart Money in this trade.
+          </>
+        ) : gap < -0.05 ? (
+          <>
+            You got into {row.coin} <span className="text-lume">{Math.abs(gap).toFixed(1)}% better</span> than the Smart Money in it.
+          </>
+        ) : (
+          <>You entered {row.coin} at the same price as the Smart Money in it.</>
+        )}
+      </p>
+      {p && (
+        <p className={`text-[14px] ${p.pressure === "high" ? "text-late" : "text-ink-2"}`}>
+          <span className="label mr-2">Exit pressure {p.pressure}</span>
+          {p.read}
+        </p>
+      )}
+    </div>
   );
 }
