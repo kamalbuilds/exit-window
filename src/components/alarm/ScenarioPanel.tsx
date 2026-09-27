@@ -11,7 +11,7 @@ const TRIGGER_OPTIONS: { id: AlarmTrigger; title: string; hint: string }[] = [
   {
     id: "near_liquidation",
     title: "Price nears the largest holder's liquidation",
-    hint: "A forced exit dumps into your exit - this times that, not a reduce.",
+    hint: "A forced exit sells into yours. This times that, not a reduce.",
   },
 ];
 
