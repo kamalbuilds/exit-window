@@ -13,6 +13,8 @@
     "alarms": "tsx --env-file=.env scripts/alarm-worker.ts"
   },
   "dependencies": {
+    "@dicebear/adventurer": "^9.4.2",
+    "@dicebear/core": "^9.4.3",
     "@phosphor-icons/react": "^2.1.10",
     "lightweight-charts": "^5.2.1",
     "motion": "^13.4.4",

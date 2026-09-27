@@ -1,27 +1,25 @@
-// Deterministic avatar per wallet: two hues and an angle derived from the address, plus the
-// cohort ring. Nansen has no profile pictures, so this is how a wallet stays recognisable across
-// the chart bubbles, tables and legend.
+// Character avatar per wallet (DiceBear "adventurer", seeded by the address): Nansen has no
+// profile pictures, so each wallet gets a stable, recognisable face across chart bubbles, tables
+// and legends. Generated locally; no request leaves the browser.
+import { createAvatar } from "@dicebear/core";
+import * as adventurer from "@dicebear/adventurer";
 
-function hash(address: string): number {
-  let h = 2166136261;
-  const s = address.toLowerCase();
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
+const BACKGROUNDS = ["b6e3f4", "c0aede", "d1d4f9", "ffd5dc", "ffdfbf", "c7f0d8", "f9e6a6"];
+const cache = new Map<string, string>();
+
+/** data: URI of the wallet's avatar SVG. */
+export function avatarUri(address: string): string {
+  const key = address.toLowerCase();
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const uri = createAvatar(adventurer, { seed: key, size: 64, backgroundColor: BACKGROUNDS }).toDataUri();
+  cache.set(key, uri);
+  return uri;
 }
 
-export function avatarColors(address: string): { a: string; b: string; angle: number } {
-  const h = hash(address);
-  const hueA = h % 360;
-  const hueB = (hueA + 40 + ((h >> 9) % 120)) % 360;
-  return { a: `hsl(${hueA} 70% 58%)`, b: `hsl(${hueB} 65% 38%)`, angle: (h >> 17) % 360 };
-}
-
+/** CSS background for places that paint the avatar themselves (chart bubbles). */
 export function avatarBackground(address: string): string {
-  const { a, b, angle } = avatarColors(address);
-  return `linear-gradient(${angle}deg, ${a}, ${b})`;
+  return `url("${avatarUri(address)}") center / cover no-repeat`;
 }
 
 /** Circular avatar; `ring` colours the border (lume for buys, late for sells, rule by default). */
@@ -38,16 +36,15 @@ export function WalletAvatar({
 }) {
   const border = ring === "lume" ? "var(--color-lume)" : ring === "late" ? "var(--color-late)" : ring === "accent" ? "var(--color-accent)" : "var(--color-rule)";
   return (
-    <span
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={avatarUri(address)}
+      alt={title ?? ""}
       title={title}
-      aria-hidden={title ? undefined : true}
-      className="inline-block rounded-full shrink-0"
-      style={{
-        width: size,
-        height: size,
-        background: avatarBackground(address),
-        boxShadow: `0 0 0 2px ${border}`,
-      }}
+      width={size}
+      height={size}
+      className="inline-block rounded-full shrink-0 bg-bezel"
+      style={{ width: size, height: size, boxShadow: `0 0 0 2px ${border}` }}
     />
   );
 }
