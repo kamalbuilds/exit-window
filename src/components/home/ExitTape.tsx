@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
 import { TokenCell } from "@/components/TokenIcon";
 import { type FeedItem } from "@/components/feed";
-import { formatUsd, shortAddr, toMs, walletLabel } from "@/components/format";
+import { formatUsd, shortAddr, toMs, walletLabel, formatPrice } from "@/components/format";
 
 const MIN_USD = 1000;
 const MAX_ROWS = 50;
@@ -82,7 +82,7 @@ export function ExitTape({
               </td>
               <td className="fig px-3 h-11 text-right text-[13px] text-ink whitespace-nowrap">{formatUsd(f.value_usd)}</td>
               <td className="fig px-3 h-11 text-right text-[13px] text-ink-2 whitespace-nowrap hidden md:table-cell">
-                {(f.price ?? f.price_usd) != null ? formatUsd((f.price ?? f.price_usd)) : "n/a"}
+                {(f.price ?? f.price_usd) != null ? formatPrice(f.price ?? f.price_usd) : "n/a"}
               </td>
               <td className="fig px-3 h-11 text-right text-[13px] text-late whitespace-nowrap">{ago(toMs(f.timestamp), now)}</td>
             </tr>

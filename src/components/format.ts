@@ -102,3 +102,11 @@ export function walletLabel(label: string | null | undefined, address: string, f
   if (!label || /^Uses ".*" HL Referral Code$/.test(label) || label === "High Balance") return fallback;
   return label;
 }
+
+/** Prices across Hyperliquid span 1e-6 to 1e5; keep 4 significant figures for small ones. */
+export function formatPrice(n: number | null | undefined): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "n/a";
+  if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  return `$${n.toPrecision(4)}`;
+}

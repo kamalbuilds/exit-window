@@ -168,8 +168,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
                 </span>
               </Chronograph>
               <p className="mt-2 text-[12px] text-ink-3">
-                {worst !== null && worst !== m ? `Fastest close ${formatMinutes(worst)}. ` : ""}The red tick is the close. Delay dots on the bezel are copier reaction times.
-              </p>
+                {worst !== null && worst !== m ? `Fastest close ${formatMinutes(worst)}. ` : ""}Red point: where the window closed. Dots on the ring: copier delays, green if they get out in time.</p>
             </div>
           </section>
 
