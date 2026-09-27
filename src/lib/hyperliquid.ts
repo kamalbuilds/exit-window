@@ -24,8 +24,9 @@ export function intervalForAge(ageMs: number): CandleInterval {
   return "1h";
 }
 
-/** Returns null (not an error) when Hyperliquid has no candles for this coin - true for
- * newly-listed HIP-3 markets ("xyz:", "io:") that the caller should skip gracefully. */
+/** Returns null (not an error) when Hyperliquid has no candles for this coin - a newly-listed
+ * market with no history yet, or a bad name. HIP-3 coins work as-is: candleSnapshot takes the
+ * dex-prefixed name directly ("xyz:CL", "io:NBIS"), no separate dex param needed. */
 export async function fetchCandles(
   coin: string,
   interval: CandleInterval,
@@ -52,33 +53,52 @@ export async function fetchCandles(
 }
 
 const MIDS_TTL_MS = 15_000;
-let midsCache: { data: Record<string, number>; fetchedAt: number } | null = null;
+const midsCache = new Map<string, { data: Record<string, number>; fetchedAt: number }>(); // keyed by dex, "" = main
 
-/** allMids changes every block; a 15s cache keeps mark-price lookups (one per report, one per
- * position list) from hammering Hyperliquid's public endpoint on every request. */
-export async function fetchAllMids(): Promise<Record<string, number>> {
-  if (midsCache && Date.now() - midsCache.fetchedAt < MIDS_TTL_MS) return midsCache.data;
+/** A builder-deployed HIP-3 market's coin name carries its dex as a prefix - "xyz:CL", "io:NBIS"
+ * - and Hyperliquid only returns its mid from an allMids call scoped to that same dex ({dex:
+ * "xyz"}); the default (no-dex) allMids call, the main perp market, never carries these. Plain
+ * coins (no ":") stay on the main dex, prefix "". Exported for the name-mapping unit test. */
+export function dexPrefix(coin: string): string {
+  const i = coin.indexOf(":");
+  return i === -1 ? "" : coin.slice(0, i);
+}
+
+/** allMids changes every block; a 15s cache per dex keeps mark-price lookups (one per report,
+ * one per position list) from hammering Hyperliquid's public endpoint on every request. */
+async function fetchMidsForDex(dex: string): Promise<Record<string, number>> {
+  const cached = midsCache.get(dex);
+  if (cached && Date.now() - cached.fetchedAt < MIDS_TTL_MS) return cached.data;
   const res = await fetch("https://api.hyperliquid.xyz/info", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "allMids" }),
+    body: JSON.stringify(dex ? { type: "allMids", dex } : { type: "allMids" }),
   });
   if (!res.ok) throw new Error(`Hyperliquid allMids ${res.status}`);
   const raw = (await res.json()) as Record<string, string | number>;
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(raw ?? {})) out[k] = Number(v);
-  midsCache = { data: out, fetchedAt: Date.now() };
+  midsCache.set(dex, { data: out, fetchedAt: Date.now() });
   return out;
 }
 
-/** Fills OpenPosition.markPx from the live mid, leaving it null only for coins allMids doesn't
- * carry (HIP-3 markets like "xyz:"/"io:" prefixes, or a delisted coin). */
+/** The main dex's mids, unscoped - unchanged shape/behavior for existing callers (mirror.ts). */
+export async function fetchAllMids(): Promise<Record<string, number>> {
+  return fetchMidsForDex("");
+}
+
+/** Fills OpenPosition.markPx from the live mid, leaving it null only for coins no dex's allMids
+ * carries (a delisted coin). Groups positions by dex prefix so a report mixing main-dex coins
+ * with HIP-3 ones (e.g. ETH plus xyz:CL, io:NBIS) fetches each dex's mids once and matches each
+ * coin against its own dex, not just the main one. */
 export async function attachMarkPrices<T extends { coin: string; markPx: number | null }>(
   positions: T[],
 ): Promise<T[]> {
   if (positions.length === 0) return positions;
-  const mids = await fetchAllMids();
-  return positions.map((p) => ({ ...p, markPx: mids[p.coin] ?? null }));
+  const dexes = [...new Set(positions.map((p) => dexPrefix(p.coin)))];
+  const entries = await Promise.all(dexes.map(async (d) => [d, await fetchMidsForDex(d)] as const));
+  const midsByDex = new Map(entries);
+  return positions.map((p) => ({ ...p, markPx: midsByDex.get(dexPrefix(p.coin))?.[p.coin] ?? null }));
 }
 
 interface RawClearinghousePosition {
@@ -89,15 +109,18 @@ interface RawClearinghousePosition {
   leverage?: { type: string; value: number };
 }
 
-/** The user's own open positions, straight from Hyperliquid's public account state - free, no
- * key, no Nansen credits. This is the "your side" of an overlap: what tgm/perp-positions'
- * labeled wallets are compared against in overlap.ts. markPx is left null; attachMarkPrices
- * fills it from the same allMids cache used everywhere else. */
-export async function fetchClearinghouseState(address: string): Promise<OpenPosition[]> {
+// clearinghouseState, like allMids, is scoped to one dex per call - a position open on a
+// builder-deployed HIP-3 market never appears in the unscoped (main-dex) call at all, not just
+// missing its mark. ponytail: queried explicitly rather than discovering every deployed dex via
+// perpDexs on each report (10+ dexes exist; most a wallet will never touch) - extend this list
+// if a position on another HIP-3 dex needs covering.
+const CLEARINGHOUSE_DEXES = ["", "xyz", "io"];
+
+async function fetchClearinghouseForDex(address: string, dex: string): Promise<OpenPosition[]> {
   const res = await fetch("https://api.hyperliquid.xyz/info", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "clearinghouseState", user: address }),
+    body: JSON.stringify(dex ? { type: "clearinghouseState", user: address, dex } : { type: "clearinghouseState", user: address }),
   });
   if (!res.ok) throw new Error(`Hyperliquid clearinghouseState ${res.status}`);
   const raw = (await res.json()) as { assetPositions?: { position: RawClearinghousePosition }[] };
@@ -114,4 +137,15 @@ export async function fetchClearinghouseState(address: string): Promise<OpenPosi
       leverage: p.leverage?.value ?? null,
     };
   });
+}
+
+/** The user's own open positions, straight from Hyperliquid's public account state - free, no
+ * key, no Nansen credits. This is the "your side" of an overlap: what tgm/perp-positions'
+ * labeled wallets are compared against in overlap.ts. markPx is left null; attachMarkPrices
+ * fills it from the same allMids cache used everywhere else. Fans out across the main dex plus
+ * every known HIP-3 dex so a builder-deployed position (xyz:CL, io:NBIS, ...) isn't silently
+ * dropped just because it lives outside the main perp market. */
+export async function fetchClearinghouseState(address: string): Promise<OpenPosition[]> {
+  const perDex = await Promise.all(CLEARINGHOUSE_DEXES.map((dex) => fetchClearinghouseForDex(address, dex)));
+  return perDex.flat();
 }
