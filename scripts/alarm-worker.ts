@@ -46,7 +46,7 @@ import {
 } from "@/lib/alarms";
 import { adverseDistancePct } from "@/lib/forced";
 import { diffPositions } from "@/lib/follow";
-import { dexPrefix, fetchAllMids, fetchClearinghouseState, fetchMidsForDex, fetchPositionOnCoin } from "@/lib/hyperliquid";
+import { dexPrefix, fetchAllMids, fetchClearinghouseState, fetchMidsForDex } from "@/lib/hyperliquid";
 import { createSmartAlert, deleteSmartAlert } from "@/lib/intel";
 import { mirrorChange } from "@/lib/mirror";
 import { logCall } from "@/lib/nansen";
@@ -247,6 +247,7 @@ async function tick(): Promise<void> {
     Promise.all(owners.map(async (o) => [o, await fetchClearinghouseState(o).catch(() => null)] as const)),
   ]);
   const ownerPosByAddr = new Map(ownerPositionEntries);
+  const leaderPosByAddr = new Map(leaderPositions); // null = this tick's read failed
   const mids = await fetchAllMids().catch(() => ({}) as Record<string, number>);
 
   for (const [leader, next] of leaderPositions) {
@@ -368,7 +369,7 @@ async function tick(): Promise<void> {
 
   // near_liquidation: a forced-exit risk on the largest watched holder's own liquidation price,
   // not a reduce - so it is checked independently of the diffPositions loop above, every tick, for
-  // every alarm carrying that trigger. Hyperliquid-only (fetchPositionOnCoin, fetchMidsForDex):
+  // every alarm carrying that trigger. Hyperliquid-only (this tick's clearinghouseState reads, fetchMidsForDex):
   // zero Nansen calls, matching the credits-exhausted constraint this trigger was built under.
   for (const record of active) {
     const rule = record.rule;
@@ -385,7 +386,13 @@ async function tick(): Promise<void> {
 
     for (const [coin, watchesForCoin] of byCoin) {
       const [positionEntries, mids] = await Promise.all([
-        Promise.all(watchesForCoin.map(async (w) => [w, await fetchPositionOnCoin(w.leader, coin).catch(() => null)] as const)),
+        // Reuses this tick's clearinghouseState reads: Hyperliquid allows 1200 weight/min per IP, shared
+        // with the sentinel. undefined = read failed (unknown), null = holds nothing on this side.
+        watchesForCoin.map((w) => {
+          const all = leaderPosByAddr.get(w.leader);
+          const pos = all ? (all.find((p) => p.coin === coin && p.direction === w.direction) ?? null) : undefined;
+          return [w, pos] as const;
+        }),
         fetchMidsForDex(dexPrefix(coin)).catch(() => ({}) as Record<string, number>),
       ]);
       const mid: number | null = mids[coin] ?? null;
@@ -396,6 +403,7 @@ async function tick(): Promise<void> {
       let best: { watch: Watch; position: OpenPosition } | null = null;
       let bestValue = -Infinity;
       for (const [watch, position] of positionEntries) {
+        if (position === undefined) continue; // read failed this tick: unknown, never "left"
         if (!position) {
           // The leader no longer holds this coin at all. Only worth a message once, and only for
           // a watch this alarm had actually been checking (nearLiqState set means it was, at some
