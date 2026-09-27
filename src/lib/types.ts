@@ -73,6 +73,18 @@ export interface OpenPosition {
   leverage: number | null;
 }
 
+/** How this wallet tends to leave a position, distilled from its own closed episodes.
+ * style: nuclear = one clip, mostly full exits on the first reduce; scaler = usually 3+ clips;
+ * trimmer = mostly partial reduces that don't close the position on the first cut; else mixed. */
+export interface ExitDna {
+  sample: number; // eligible (observed-open, closed, at least one exit) episodes this is built from
+  firstReduceToFlatMedianMin: number | null; // median minutes from first reduce to fully flat
+  fullExitAfterFirstReducePct: number; // % of eligible episodes closed in a single exit tranche
+  medianClips: number; // median number of separate exit tranches per episode
+  firstReduceAtPnlPct: number | null; // median direction-adjusted price move at the first reduce
+  style: "nuclear" | "scaler" | "trimmer" | "mixed";
+}
+
 export interface WalletReport {
   address: string;
   label: string | null; // Nansen label if known
@@ -88,6 +100,7 @@ export interface WalletReport {
   realizedPnlUsd: number | null; // from profiler/perp-pnl-summary
   unrealizedPnlUsd: number | null;
   episodes: Episode[];
+  exitDna: ExitDna | null; // null when there aren't enough closed, observed episodes to say anything
   openPositions: OpenPosition[];
   nansenCalls: number; // Nansen API calls this report cost
   backtestEligible: number; // episodes with a full observed entry+exit, used in the latency backtest

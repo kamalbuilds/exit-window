@@ -6,7 +6,7 @@ import { loadFills, saveFills, mergeFills } from "./fills-store";
 import { fillsToEpisodes } from "./positions";
 import { measureWindow } from "./exitwindow";
 import { latencyTax, buildVerdict } from "./backtest";
-import type { Episode, ExitWindow, Fill, WalletReport } from "./types";
+import type { Episode, ExitDna, ExitWindow, Fill, WalletReport } from "./types";
 import { LATENCIES_SEC } from "./types";
 
 const MAX_PAGES = 5;
@@ -115,6 +115,37 @@ function classifyExitStyle(episodes: Episode[]): WalletReport["exitStyle"] {
   return "mixed";
 }
 
+/** Distills how this wallet tends to leave a position from its own closed, observed-open episodes.
+ * Null when there's nothing to say (no eligible episode). Order matters: nuclear is checked before
+ * scaler so a wallet with exactly one clip that always fully exits reads as nuclear, not scaler. */
+export function computeExitDna(episodes: Episode[]): ExitDna | null {
+  const eligible = episodes.filter(
+    (ep) => ep.observedOpen && ep.closedAt !== null && ep.exits.length > 0 && ep.walletReturnPct !== null,
+  );
+  if (eligible.length === 0) return null;
+
+  const sample = eligible.length;
+  const firstReduceToFlatMedianMin = median(
+    eligible.map((ep) => ((ep.closedAt as number) - ep.exits[0].t) / 60_000),
+  );
+  const fullExitAfterFirstReducePct = (eligible.filter((ep) => ep.exits.length === 1).length / sample) * 100;
+  const medianClips = median(eligible.map((ep) => ep.exits.length)) as number;
+  const firstReduceAtPnlPct = median(
+    eligible.map((ep) => {
+      const move = (ep.exits[0].px - ep.avgEntryPx) / ep.avgEntryPx;
+      return (ep.direction === "long" ? move : -move) * 100;
+    }),
+  );
+
+  let style: ExitDna["style"];
+  if (medianClips <= 1 && fullExitAfterFirstReducePct >= 70) style = "nuclear";
+  else if (medianClips >= 3) style = "scaler";
+  else if (fullExitAfterFirstReducePct < 40) style = "trimmer";
+  else style = "mixed";
+
+  return { sample, firstReduceToFlatMedianMin, fullExitAfterFirstReducePct, medianClips, firstReduceAtPnlPct, style };
+}
+
 const reportCache = new Map<string, { report: WalletReport; cachedAt: number }>();
 const REPORT_CACHE_TTL_MS = 10 * 60_000;
 
@@ -201,6 +232,7 @@ export async function buildReport(address: string, options: BuildReportOptions =
     realizedPnlUsd: pnlSummary.data.realizedPnlUsd,
     unrealizedPnlUsd,
     episodes,
+    exitDna: computeExitDna(episodes),
     openPositions,
     nansenCalls: networkCallsSince(callsBefore),
     backtestEligible: eligible.length,
