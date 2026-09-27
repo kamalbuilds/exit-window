@@ -28,7 +28,9 @@ export function LatencyLadder({
       <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 border-t border-b border-ink py-2 label">
         <span>Delay</span>
         <span className="text-right">You made</span>
-        <span className="text-right">Tax</span>
+        <span className="text-right" title="Latency tax: the return a copier gives up at this delay versus the wallet's own return.">
+          Tax
+        </span>
         <span className="text-right">Late exits</span>
       </div>
       <ol>

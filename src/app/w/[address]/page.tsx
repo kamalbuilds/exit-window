@@ -2,16 +2,23 @@
 
 import Link from "next/link";
 import { use, useState } from "react";
-import type { Episode, ExitWindow, WalletReport } from "@/lib/types";
+import type { AlarmReplay, Episode, ExitDna, ExitWindow, WalletReport } from "@/lib/types";
 import { Chronograph } from "@/components/Chronograph";
 import { ErrorState } from "@/components/States";
-import { formatAgo, formatMinutes, formatUsd, shortAddr } from "@/components/format";
+import { formatAgo, formatDate, formatMinutes, formatPct, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
 import { ExitStrip, StripAxis } from "@/components/report/ExitStrip";
 import { FollowRail } from "@/components/report/FollowRail";
 import { LatencyLadder } from "@/components/report/LatencyLadder";
 import { Positions } from "@/components/report/Positions";
 import { DELAYS, inTime } from "@/components/timescale";
+
+const STYLE_GLOSS: Record<ExitDna["style"], string> = {
+  nuclear: "dumps the whole position at once",
+  scaler: "sells in several steps",
+  trimmer: "trims and keeps holding",
+  mixed: "no single consistent pattern",
+};
 
 function meanWalletReturn(episodes: Episode[]): number | null {
   const r = episodes.filter((e) => e.observedOpen && e.walletReturnPct !== null).map((e) => e.walletReturnPct as number);
@@ -75,6 +82,11 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
   const before = openedBefore(report.episodes);
   const m = report.medianWindowMin;
   const windows = [...report.windows].sort((a, b) => b.firstReduceAt - a.firstReduceAt);
+  // Worst exit window = the fastest one to close: least time an unaware copier had to react.
+  const closedMins = report.windows.map((w) => w.windowMin).filter((w): w is number => w !== null);
+  const worst = closedMins.length ? Math.min(...closedMins) : null;
+  const medianValue =
+    m === null ? "none closed" : worst !== null && worst !== m ? `${formatMinutes(m)}, fastest ${formatMinutes(worst)}` : formatMinutes(m);
 
   return (
     <>
@@ -84,15 +96,21 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
           <ClusterLine address={address} />
           <h1 className={`display text-[clamp(36px,5vw,60px)] mt-5 ${v.tone === "late" ? "text-late" : "text-ink"}`}>{v.lead}</h1>
           <dl className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-5 border-t border-ink pt-5">
-            <Stat term="Median window" value={m === null ? "none closed" : formatMinutes(m)} />
+            <Stat
+              term="Median window"
+              value={medianValue}
+              title="Exit window: how long a copier can hold after this wallet's first reduce before price moves 1% against them."
+            />
             <Stat term="Exits timed" value={String(report.windows.length)} />
             <Stat term="Realized 30d" value={formatUsd(report.realizedPnlUsd, { sign: true })} tone={(report.realizedPnlUsd ?? 0) >= 0 ? "lume" : "late"} />
             <Stat term="Still on paper" value={formatUsd(report.unrealizedPnlUsd, { sign: true })} tone={(report.unrealizedPnlUsd ?? 0) >= 0 ? "lume" : "late"} />
           </dl>
           <p className="mt-5 text-[13px] text-ink-3">
             Exit style: {report.exitStyle === "scaler" ? "scales out over several reduces" : report.exitStyle === "one_shot" ? "closes in a single move" : report.exitStyle === "mixed" ? "sometimes scales out, sometimes dumps at once" : "not enough closed positions to tell"}.
-            {fetchedAt ? ` Data ${formatAgo(fetchedAt)}.` : ""}
+            {windows.length > 0 ? ` Latest timed exit ${formatDate(windows[0].firstReduceAt)}.` : fetchedAt ? ` Data ${formatAgo(fetchedAt)}.` : ""}
           </p>
+          {report.exitDna && <ExitDnaBlock dna={report.exitDna} />}
+          {report.alarmReplay && <AlarmReplayBlock ar={report.alarmReplay} />}
         </div>
         <div className="lg:col-span-5">
           <Chronograph size={480} windowMin={m} title={`Median exit window ${m === null ? "unknown" : formatMinutes(m)}`}>
@@ -127,7 +145,12 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
           </section>
 
           <section>
-            <h2 className="display text-[28px] mb-1">What copying it cost</h2>
+            <h2
+              className="display text-[28px] mb-1"
+              title="Latency tax: the return a copier gives up by mirroring this wallet's entries and exits after a delay, instead of instantly."
+            >
+              What copying it cost
+            </h2>
             <p className="text-[13px] text-ink-3 mb-4">A copier mirroring every entry and every exit at your delay, after 4.5 bps fees and 5 bps slippage each way.</p>
             <LatencyLadder latency={report.latency} walletReturnPct={meanWalletReturn(report.episodes)} maxSafeLatencySec={report.maxSafeLatencySec} note={report.backtestNote ?? null} />
           </section>
@@ -156,11 +179,50 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
   );
 }
 
-function Stat({ term, value, tone }: { term: string; value: string; tone?: "lume" | "late" }) {
+function Stat({ term, value, tone, title }: { term: string; value: string; tone?: "lume" | "late"; title?: string }) {
   return (
     <div>
-      <dt className="label">{term}</dt>
+      <dt className="label" title={title}>
+        {term}
+      </dt>
       <dd className={`fig text-[20px] mt-1 ${tone === "lume" ? "text-lume" : tone === "late" ? "text-late" : "text-ink"}`}>{value}</dd>
+    </div>
+  );
+}
+
+/** How this wallet tends to leave a position, distilled from its own closed episodes. */
+function ExitDnaBlock({ dna }: { dna: ExitDna }) {
+  const clipsLabel = Number.isInteger(dna.medianClips) ? String(dna.medianClips) : dna.medianClips.toFixed(1);
+  return (
+    <div className="mt-6 pt-5 border-t border-ink">
+      <p className="label" title="How this wallet tends to leave a position, from its own closed trades.">
+        Exit DNA
+      </p>
+      <p className="mt-2 text-[15px] text-ink-2 max-w-[54ch]">
+        First reduce became a full exit <span className="fig text-ink">{Math.round(dna.fullExitAfterFirstReducePct)}%</span> of the time
+        {dna.firstReduceToFlatMedianMin != null ? (
+          <>
+            , usually within <span className="fig text-ink">{formatMinutes(dna.firstReduceToFlatMedianMin)}</span>
+          </>
+        ) : null}
+        , in <span className="fig text-ink">{clipsLabel}</span> clip{dna.medianClips === 1 ? "" : "s"}.
+      </p>
+      <p className="mt-2 text-[14px]">
+        <span className="fig text-ink font-medium capitalize">{dna.style}</span> <span className="text-ink-3">({STYLE_GLOSS[dna.style]})</span>
+      </p>
+    </div>
+  );
+}
+
+/** Backtests the alarm itself against this wallet's own closed episodes. */
+function AlarmReplayBlock({ ar }: { ar: AlarmReplay }) {
+  return (
+    <div className="mt-4 pt-4 border-t border-rule">
+      <p className="text-[15px] text-ink-2 max-w-[56ch]">
+        Acting on the alarm within a minute saved a holder{" "}
+        <span className={`fig ${ar.savedVsWaitingPct >= 0 ? "text-lume" : "text-late"}`}>{formatPct(ar.savedVsWaitingPct, 1)}</span> on average vs
+        waiting for this wallet&apos;s last exit (<span className="fig">{ar.episodes}</span> exit{ar.episodes === 1 ? "" : "s"}).
+      </p>
     </div>
   );
 }
