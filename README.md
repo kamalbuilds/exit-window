@@ -9,7 +9,7 @@ Exit Window is for Hyperliquid traders who already hold a position that Smart Mo
 3. shows how each of those wallets exits: how often a first reduce becomes a full exit, how fast, and how many minutes a holder had before price moved 1% against them,
 4. arms a Telegram alarm that messages you the moment one of them starts selling, with an optional protection rule that cuts your own position through Nansen's perp trading API.
 
-Built for the Nansen Meridian Buildathon. Nansen is the data layer for every decision in the product; Hyperliquid's public API only supplies price candles, live liquidation prices, and a free 30-second position tick for the alarm.
+Built for the Nansen Meridian Buildathon. Nansen is the data layer for every decision in the product; Hyperliquid's public API supplies price candles, live liquidation prices, a free 30-second position tick for the alarm, and a wallet's fills when Nansen credits run out.
 
 - Live: https://exit-window.fly.dev
 - Telegram bot: [@nansen_meridian_bot](https://t.me/nansen_meridian_bot)
@@ -29,7 +29,9 @@ Nansen asked the same question from the other side: *"the more interesting one i
 
 ## What you see
 
-**Your trades.** Paste your Hyperliquid address. Every position, the Smart Money on the same side, how far above them you bought, and a live chart of your entry against theirs with every Smart Money buy and sell marked.
+**Your trades.** Paste your Hyperliquid address. Every position, the Smart Money on the same side, how far above them you bought, and a live chart of your entry against theirs with every Smart Money buy and sell marked as an avatar bubble for the wallet that made it.
+
+A filter bar narrows which Smart Money counts: cohort (Smart Money, whale, public figure), Nansen label (fund, Smart HL Perps Trader, 30/90/180-day Smart Trader, position trader), minimum position size, hide referral-only wallets, and exit risk. The table, the chart and the default alarm watches all follow it.
 
 ![Your trades: your entry against the Smart Money in your trade](docs/screenshots/your-trades.png)
 
@@ -92,20 +94,23 @@ Every call goes through one client (`nansenCall` in `src/lib/nansen.ts`) that ca
 
 ## Run it locally (about 5 minutes)
 
-Requirements: Node 22+, a Nansen API key (https://app.nansen.ai/api), and for the alarm a Telegram bot token from [@BotFather](https://t.me/BotFather).
+Requirements: Node 22+ (tested on 24.9). No API key is needed to run the demo: the repository ships a seed of paid Nansen responses in `data/nansen-seed` (the demo wallet and its Smart Money), and live positions, prices, fills and liquidation prices come from Hyperliquid's free public API. Add a Nansen API key (https://app.nansen.ai/api) for fresh Nansen data on wallets and coins outside the seed, and a Telegram bot token from [@BotFather](https://t.me/BotFather) for the alarm.
 
 ```bash
 git clone https://github.com/kamalbuilds/exit-window
 cd exit-window
-npm install
-cp .env.example .env        # then put NANSEN_API_KEY and TELEGRAM_BOT_TOKEN in .env
-npm run dev                 # site on http://localhost:3000
-npm run alarms              # Telegram alarm worker, in a second terminal
+npm install                 # about 10 s
+cp .env.example .env        # optional: NANSEN_API_KEY, TELEGRAM_BOT_TOKEN
+npm run dev                 # site on http://localhost:3000, ready in a few seconds
+npm run alarms              # second terminal: Telegram alarm worker (needs TELEGRAM_BOT_TOKEN)
+npm run sentinel            # third terminal, optional: live Smart Money exit feed, zero Nansen calls
 ```
 
-Try it without a position of your own: open http://localhost:3000/me/0xea0027b6ea9b6d7d401b5266979cc3b3ca87a918 (a Hyperliquid whale with open ETH, SOL and HYPE longs) and press **Alert me on Telegram**.
+Then open http://localhost:3000/me/0xea0027b6ea9b6d7d401b5266979cc3b3ca87a918, a Hyperliquid whale with 11 open positions (ETH, SOL, HYPE, PURR, LIT and others). Each position lists the Smart Money on the same side, the chart of your entry against theirs, and the Forced exits ladder. The top two holders of each position are timed one after another in the background; each takes 15 to 60 seconds on a cold start while their fills and candles load from Hyperliquid. Press **Arm exit alarm** to build a scenario and get the Telegram deep link.
 
-The repository ships a seed of cached Nansen responses in `data/nansen-seed`, so the sample wallets load without spending credits.
+Measured on a fresh clone with no keys set (2026-09-27): `npm install` 10 s, dev server ready in 4 s, `/api/overlap` for the demo wallet 1.7 s, each holder report 16 to 65 s, `npm test` 254 passing.
+
+Hyperliquid allows 1200 request weight per minute per IP. Every call goes through one limiter (`src/lib/hyperliquid.ts`), and each process takes its share from `HL_WEIGHT_PER_MIN` (default 400, so site, worker and sentinel together stay at 1200).
 
 Optional, for the protection rule to trade for real instead of on paper: `HL_API_WALLET_KEY` (a Hyperliquid API wallet created in the Hyperliquid app, which can trade but not withdraw), `HL_ACCOUNT_ADDRESS`, `MIRROR_MAX_USD` (default 100). The main wallet must approve Nansen's builder fee once before the first order.
 
@@ -113,11 +118,22 @@ Other scripts: `npm test` (vitest), `npm run calls:report` (rewrites `docs/API-C
 
 ## Telegram alarm
 
-`POST /api/alarm` stores the watches and returns a deep link. Opening it and pressing Start binds your chat. The worker (`scripts/alarm-worker.ts`) then:
+**Arm exit alarm** on `/me` opens a scenario builder that previews the rule as one sentence before you arm it. When:
+
+- any watched wallet reduces, optionally only by at least 10, 25 or 50%,
+- 2 or more of them reduce within an hour (consensus),
+- the largest holder you watch reduces,
+- a wallet rated High exit risk reduces,
+- price comes within N% of the largest watched holder's liquidation price.
+
+Then: message you on Telegram, or message and cut your position 25%, 50% or close it, with an optional "Ask Nansen Agent why" button.
+
+`POST /api/alarm` stores the watches and the rule and returns a deep link. Opening it and pressing Start binds your chat. The worker (`scripts/alarm-worker.ts`) then:
 
 - reads each watched wallet's positions from Hyperliquid every 30 seconds (free, no Nansen credits),
 - on a reduce of your coin, messages you with the size of the cut, the wallet's median exit window and Exit DNA, and leads with consensus when several wallets in your trade reduce within an hour,
-- runs your protection rule if you set one,
+- checks the near-liquidation scenario on the same tick, fires once, and re-arms only after price moves back away,
+- runs your cut if the rule has one (sized from your own live position, capped at `MIRROR_MAX_USD`),
 - stops watching a coin after you close your own position.
 
 Commands: `/list`, `/stop`, `/test` (a labeled sample built from your real watch data).
@@ -127,14 +143,16 @@ Commands: `/list`, `/stop`, `/test` (a labeled sample built from your real watch
 ```
 Browser  ->  Next.js 16 app (src/app)
                /            live Smart Money reduces, wallet search
-               /me/[addr]   your positions, Smart Money in them, entry gap, exit pressure, alarm
-               /w/[addr]    one wallet: exit windows, Exit DNA, latency tax, open positions
+               /me/[addr]   your positions, Smart Money in them, entry gap, exit pressure, forced exits, filters, alarm builder
+               /w/[addr]    one wallet: exit windows, Exit DNA, latency tax, open positions, share card
+               /wallets     top Hyperliquid wallets from Nansen's perp leaderboard
                /calls       every Nansen call
-             API routes (src/app/api) -> src/lib (nansen, intel, report, positions, exitwindow, backtest, mirror, alarms)
+             API routes (src/app/api) -> src/lib (nansen, hyperliquid, intel, overlap, forced, report, positions, exitwindow, backtest, mirror, alarms, sentinel)
 Worker   ->  scripts/alarm-worker.ts (Telegram long-poll + 30 s Hyperliquid tick)
-State    ->  .cache/ (Nansen responses), data/ (call log, fills, alarms, seed)
+Sentinel ->  scripts/sentinel.ts (sweeps the Nansen-labeled watchlist on Hyperliquid every 60 s, zero Nansen calls)
+State    ->  .cache/ (Nansen responses), data/ (call log, fills, alarms, seed, live exits)
 ```
 
-Deployed as one Fly.io machine running the site and the worker, with a volume for the cache, call log and alarms (`Dockerfile`, `fly.toml`, `deploy/start.sh`).
+Deployed as one Fly.io machine running the site, the worker and the sentinel, with a volume for the cache, call log and alarms (`Dockerfile`, `fly.toml`, `deploy/start.sh`).
 
-Design system: [`DESIGN.md`](DESIGN.md) (a porcelain chronograph: every time axis is the same log scale).
+Design system: [`DESIGN.md`](DESIGN.md) (a dark Nansen-style app shell; the exit dial is a log-scale chronograph from 10 s to 24 h).
