@@ -167,14 +167,56 @@ export interface CohortIntel {
   oneLiner: string | null;
 }
 
-/** search/general response -> best token match for `coin`. Exact symbol match wins; else the
- * top result. */
-export function parseSearchResponse(j: Json, coin: string): TokenResolution | null {
-  const tokens = (j as { tokens?: { symbol?: string; address?: string; chain?: string }[] }).tokens ?? [];
-  const exact = tokens.find((t) => (t.symbol ?? "").toUpperCase() === coin.toUpperCase());
-  const pick = exact ?? tokens[0];
-  if (!pick || !pick.address || !pick.chain) return null;
-  return { address: pick.address, chain: pick.chain };
+export interface TokenCandidate {
+  symbol: string;
+  chain: string;
+  address: string;
+  marketCapUsd: number | null;
+}
+
+/** search/general response -> every candidate for `coin` (exact symbol match only). Nansen
+ * indexes a Hyperliquid perp under chain="hyperliquid" with a symbolic non-hex address (e.g.
+ * address="HYPE"), plus separate real on-chain entries per chain it also trades on. Both pickers
+ * below read from this same list so one search call serves cohort (perp) and smart-alert (spot). */
+export function parseSearchTokens(j: Json, coin: string): TokenCandidate[] {
+  const tokens = (j as { tokens?: { symbol?: string; address?: string; chain?: string; market_cap?: number }[] }).tokens ?? [];
+  return tokens
+    .filter((t) => (t.symbol ?? "").toUpperCase() === coin.toUpperCase() && t.address && t.chain)
+    .map((t) => ({
+      symbol: t.symbol as string,
+      chain: t.chain as string,
+      address: t.address as string,
+      marketCapUsd: t.market_cap ?? null,
+    }));
+}
+
+/** Perp lookup for tgm/position-intelligence: the chain="hyperliquid" entry (symbolic address is
+ * correct here - the spec says token_address validation is skipped for perps/hyperliquid). Falls
+ * back to the top-ranked candidate if Nansen ever stops tagging a coin that way. */
+export function pickPerpToken(candidates: TokenCandidate[]): TokenResolution | null {
+  const perp = candidates.find((c) => c.chain === "hyperliquid") ?? candidates[0];
+  return perp ? { address: perp.address, chain: perp.chain } : null;
+}
+
+/** On-chain spot lookup for the smart-alert (sm-token-flows watches real token transfers, so the
+ * symbolic hyperliquid address is useless here). Excludes the hyperliquid entry, then prefers
+ * hyperevm (Hyperliquid's own EVM, where its native assets actually live) over other chains, and
+ * within a chain prefers the candidate whose market cap matches the hyperliquid listing (same
+ * asset) over unrelated same-ticker tokens elsewhere with a much smaller market cap. */
+const SPOT_CHAIN_PREFERENCE = ["hyperevm", "ethereum", "arbitrum", "base", "optimism"];
+
+export function pickSpotToken(candidates: TokenCandidate[]): TokenResolution | null {
+  const perpCap = candidates.find((c) => c.chain === "hyperliquid")?.marketCapUsd ?? null;
+  const onChain = candidates.filter((c) => c.chain !== "hyperliquid");
+  const sameAsset = perpCap
+    ? onChain.filter((c) => c.marketCapUsd !== null && Math.abs(c.marketCapUsd - perpCap) / perpCap < 0.05)
+    : onChain;
+  const pool = sameAsset.length > 0 ? sameAsset : onChain;
+  for (const chain of SPOT_CHAIN_PREFERENCE) {
+    const hit = pool.find((c) => c.chain === chain);
+    if (hit) return { address: hit.address, chain: hit.chain };
+  }
+  return pool[0] ? { address: pool[0].address, chain: pool[0].chain } : null;
 }
 
 /** tgm/position-intelligence response (an array, one row expected) -> USD long/short by cohort. */
@@ -211,15 +253,27 @@ export function buildCohortOneLiner(
   return `Smart Traders are ${fmtRatio(short / long)}x net short ${coin}.`;
 }
 
-async function resolveTokenAddress(coin: string): Promise<TokenResolution | null> {
+async function searchCandidates(coin: string): Promise<TokenCandidate[]> {
   return cached(`search:${coin.toLowerCase()}`, SEARCH_TTL_MS, async () => {
     const res = await nansenCall(
       "search/general",
-      { search_query: coin, result_type: "token", limit: 5 },
-      (j) => parseSearchResponse(j, coin),
+      { search_query: coin, result_type: "token", limit: 10 },
+      (j) => parseSearchTokens(j, coin),
     );
     return res.data;
   });
+}
+
+/** Perp-market token for tgm/position-intelligence. */
+async function resolveTokenAddress(coin: string): Promise<TokenResolution | null> {
+  return pickPerpToken(await searchCandidates(coin));
+}
+
+/** Real on-chain spot token for the smart-alert. Shares the same 24h-cached search call as
+ * resolveTokenAddress above, so resolving both costs one network call per coin per day. Exported
+ * read-only (no write) so a caller can build+print an alert body without calling createSmartAlert. */
+export async function resolveSpotToken(coin: string): Promise<TokenResolution | null> {
+  return pickSpotToken(await searchCandidates(coin));
 }
 
 export async function fetchCohortIntel(coin: string): Promise<CohortIntel> {
@@ -327,9 +381,9 @@ export async function createSmartAlert(params: {
   direction: Direction;
   thresholdUsd?: number;
 }): Promise<SmartAlertCreated> {
-  const resolved = await resolveTokenAddress(params.coin);
+  const resolved = await resolveSpotToken(params.coin);
   if (!resolved) {
-    throw new Error(`could not resolve a spot token address for "${params.coin}"`);
+    throw new Error(`could not resolve a real on-chain spot token address for "${params.coin}"`);
   }
   const request = buildSmartAlertRequest({ ...params, tokenAddress: resolved.address, tokenChain: resolved.chain });
   const res = await nansenCall("smart-alert", request, (j) => {

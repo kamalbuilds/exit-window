@@ -7,9 +7,12 @@ import {
   parseLabelsResponse,
   parsePositionIntelligenceResponse,
   parseRelatedWalletsResponse,
-  parseSearchResponse,
+  parseSearchTokens,
+  pickPerpToken,
+  pickSpotToken,
   summarizeSmartMoneyTrades,
   type Reducer,
+  type TokenCandidate,
 } from "../src/lib/intel";
 import type { SmartMoneyPerpTrade } from "../src/lib/nansen";
 
@@ -45,25 +48,66 @@ describe("parseRelatedWalletsResponse", () => {
   });
 });
 
-describe("parseSearchResponse", () => {
-  const json = {
-    tokens: [
-      { symbol: "WHYPE", address: "0x1", chain: "hyperevm" },
-      { symbol: "HYPE", address: "0x2", chain: "hyperevm" },
-    ],
-  };
-
-  it("prefers an exact symbol match over the top result", () => {
-    expect(parseSearchResponse(json, "HYPE")).toEqual({ address: "0x2", chain: "hyperevm" });
+describe("parseSearchTokens", () => {
+  it("keeps only exact symbol matches with a real address and chain", () => {
+    const json = {
+      tokens: [
+        { symbol: "HYPE", address: "HYPE", chain: "hyperliquid", market_cap: 20_000_000_000 },
+        { symbol: "WHYPE", address: "0x1", chain: "hyperevm" },
+        { symbol: "HYPE", address: "0xeeee", chain: "hyperevm", market_cap: 20_000_000_000 },
+      ],
+    };
+    const candidates = parseSearchTokens(json, "HYPE");
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((c) => c.chain)).toEqual(["hyperliquid", "hyperevm"]);
   });
 
-  it("falls back to the first result when there is no exact match", () => {
-    const noExact = { tokens: [{ symbol: "WETH", address: "0x3", chain: "ethereum" }] };
-    expect(parseSearchResponse(noExact, "ETH")).toEqual({ address: "0x3", chain: "ethereum" });
+  it("returns an empty list when nothing resolves", () => {
+    expect(parseSearchTokens({ tokens: [] }, "xyz:BRENTOIL")).toEqual([]);
+  });
+});
+
+describe("pickPerpToken", () => {
+  it("picks the hyperliquid (symbolic) entry for tgm/position-intelligence", () => {
+    const candidates: TokenCandidate[] = [
+      { symbol: "HYPE", chain: "hyperevm", address: "0xeeee", marketCapUsd: 20e9 },
+      { symbol: "HYPE", chain: "hyperliquid", address: "HYPE", marketCapUsd: 20e9 },
+    ];
+    expect(pickPerpToken(candidates)).toEqual({ address: "HYPE", chain: "hyperliquid" });
   });
 
-  it("returns null when nothing resolves", () => {
-    expect(parseSearchResponse({ tokens: [] }, "xyz:BRENTOIL")).toBeNull();
+  it("falls back to the first candidate when there is no hyperliquid entry", () => {
+    const candidates: TokenCandidate[] = [{ symbol: "ETHFI", chain: "ethereum", address: "0x1", marketCapUsd: 1 }];
+    expect(pickPerpToken(candidates)).toEqual({ address: "0x1", chain: "ethereum" });
+  });
+
+  it("returns null for an empty list", () => {
+    expect(pickPerpToken([])).toBeNull();
+  });
+});
+
+describe("pickSpotToken", () => {
+  it("prefers hyperevm over an unrelated same-ticker token on another chain", () => {
+    const candidates: TokenCandidate[] = [
+      { symbol: "HYPE", chain: "hyperliquid", address: "HYPE", marketCapUsd: 20e9 },
+      { symbol: "HYPE", chain: "solana", address: "98sM...", marketCapUsd: 74e6 }, // imposter, tiny cap
+      { symbol: "HYPE", chain: "hyperevm", address: "0xeeee", marketCapUsd: 20e9 }, // real twin
+    ];
+    expect(pickSpotToken(candidates)).toEqual({ address: "0xeeee", chain: "hyperevm" });
+  });
+
+  it("prefers ethereum when there is no hyperevm candidate", () => {
+    const candidates: TokenCandidate[] = [
+      { symbol: "ETH", chain: "hyperliquid", address: "ETH", marketCapUsd: 331e9 },
+      { symbol: "ETH", chain: "base", address: "0xbase", marketCapUsd: 331e9 },
+      { symbol: "ETH", chain: "ethereum", address: "0xeth", marketCapUsd: 331e9 },
+    ];
+    expect(pickSpotToken(candidates)).toEqual({ address: "0xeth", chain: "ethereum" });
+  });
+
+  it("returns null when the only candidate is the symbolic hyperliquid entry", () => {
+    const candidates: TokenCandidate[] = [{ symbol: "XYZ", chain: "hyperliquid", address: "XYZ", marketCapUsd: 1 }];
+    expect(pickSpotToken(candidates)).toBeNull();
   });
 });
 
