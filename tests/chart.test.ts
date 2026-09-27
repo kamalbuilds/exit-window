@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { bandsFromReduces, classifyFill, valueWeightedEntry, type ChartMarker } from "../src/lib/chart";
+import {
+  bandsFromReduces,
+  bubbleSize,
+  classifyFill,
+  clusterBubbles,
+  passesMinSize,
+  valueWeightedEntry,
+  type ChartMarker,
+} from "../src/lib/chart";
+import { walletLabel } from "../src/components/format";
 import type { Candle } from "../src/lib/hyperliquid";
 import type { Fill } from "../src/lib/types";
 
@@ -113,5 +122,90 @@ describe("bandsFromReduces", () => {
 
   it("returns no bands when there are no candles", () => {
     expect(bandsFromReduces([marker({})], "BTC", [])).toHaveLength(0);
+  });
+});
+
+describe("passesMinSize", () => {
+  it("any lets everything through", () => {
+    expect(passesMinSize(1, "any")).toBe(true);
+  });
+
+  it("thresholds use absolute usd", () => {
+    expect(passesMinSize(-5000, "1k")).toBe(true);
+    expect(passesMinSize(500, "1k")).toBe(false);
+    expect(passesMinSize(10_000, "10k")).toBe(true);
+    expect(passesMinSize(9_999, "10k")).toBe(false);
+    expect(passesMinSize(100_000, "100k")).toBe(true);
+    expect(passesMinSize(99_999, "100k")).toBe(false);
+  });
+});
+
+describe("bubbleSize", () => {
+  it("is monotonic and bounded to [18, 34] by default", () => {
+    expect(bubbleSize(0)).toBeCloseTo(18, 5);
+    expect(bubbleSize(1_000_000)).toBeCloseTo(34, 5);
+    const small = bubbleSize(300);
+    const big = bubbleSize(300_000);
+    expect(small).toBeGreaterThan(18);
+    expect(small).toBeLessThan(big);
+    expect(big).toBeLessThan(34);
+  });
+
+  it("clamps sizes above the $1M reference", () => {
+    expect(bubbleSize(50_000_000)).toBeCloseTo(34, 5);
+  });
+
+  it("uses the magnitude of a negative (sell) usd", () => {
+    expect(bubbleSize(-300_000)).toBeCloseTo(bubbleSize(300_000), 5);
+  });
+});
+
+describe("clusterBubbles", () => {
+  it("merges points within the radius and keeps far points separate", () => {
+    const clusters = clusterBubbles(
+      [
+        { x: 0, y: 0, id: "a" },
+        { x: 5, y: 5, id: "b" },
+        { x: 100, y: 100, id: "c" },
+      ],
+      14,
+    );
+    expect(clusters).toHaveLength(2);
+    const merged = clusters.find((c) => c.items.length === 2)!;
+    expect(merged.items.map((i) => i.id).sort()).toEqual(["a", "b"]);
+    expect(merged.x).toBeCloseTo(2.5, 5);
+    expect(merged.y).toBeCloseTo(2.5, 5);
+    const solo = clusters.find((c) => c.items.length === 1)!;
+    expect(solo.items[0].id).toBe("c");
+  });
+
+  it("a check that can fail: distant points never merge", () => {
+    const clusters = clusterBubbles(
+      [
+        { x: 0, y: 0 },
+        { x: 50, y: 0 },
+      ],
+      14,
+    );
+    expect(clusters).toHaveLength(2);
+  });
+
+  it("keeps every point in its own cluster when the list is empty or singleton", () => {
+    expect(clusterBubbles([])).toHaveLength(0);
+    expect(clusterBubbles([{ x: 1, y: 1 }])).toHaveLength(1);
+  });
+});
+
+describe("walletLabel (hover card label cleanup)", () => {
+  it("hides a referral-code label behind the cohort fallback", () => {
+    expect(walletLabel('Uses "ABC123" HL Referral Code', "0xabc")).toBe("Smart Money wallet");
+  });
+
+  it("hides the junk 'High Balance' label", () => {
+    expect(walletLabel("High Balance", "0xabc")).toBe("Smart Money wallet");
+  });
+
+  it("keeps a real label", () => {
+    expect(walletLabel("Whale #4", "0xabc")).toBe("Whale #4");
   });
 });

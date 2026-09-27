@@ -2,23 +2,22 @@
 
 import {
   createChart,
-  createSeriesMarkers,
   CandlestickSeries,
   ColorType,
   LineStyle,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
-  type ISeriesMarkersPluginApi,
-  type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChartMarker, ChartResponse, WindowBand } from "@/lib/chart";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChartMarker, ChartResponse, MinSizeFilter, WindowBand } from "@/lib/chart";
+import { bubbleSize, clusterBubbles, passesMinSize } from "@/lib/chart";
 import type { Candle } from "@/lib/hyperliquid";
-import { formatUsd } from "@/components/format";
+import { formatDate, formatUsd, shortAddr, walletLabel } from "@/components/format";
 import { TokenCell } from "@/components/TokenIcon";
+import { WalletAvatar, avatarBackground } from "@/components/WalletAvatar";
 import { usePoll } from "@/components/usePoll";
 
 const TIMEFRAMES = ["1h", "4h", "1d", "7d"] as const;
@@ -30,14 +29,22 @@ const THEME = {
   text: "#a3adb6",
   up: "#3fd49a",
   down: "#f0616d",
+  entryRing: "#7c8892",
 };
+
+const MIN_SIZE_OPTIONS: { value: MinSizeFilter; label: string }[] = [
+  { value: "any", label: "Any" },
+  { value: "1k", label: ">$1K" },
+  { value: "10k", label: ">$10K" },
+  { value: "100k", label: ">$100K" },
+];
 
 function toUTC(ms: number): UTCTimestamp {
   return Math.floor(ms / 1000) as UTCTimestamp;
 }
 
-/** Markers must land on a real bar or the plugin drops them; snap to the candle that was open
- * at the fill's time. */
+/** Bubbles and bands must land on a real bar or the plugin drops them; snap to the candle that
+ * was open at the fill's time. */
 function snapToCandle(candles: Candle[], t: number): number | null {
   if (candles.length === 0) return null;
   if (t <= candles[0].t) return candles[0].t;
@@ -49,6 +56,22 @@ function snapToCandle(candles: Candle[], t: number): number | null {
   return best ?? candles[candles.length - 1].t;
 }
 
+/** A tracked Smart Money wallet in the user's trade, passed in by the page. */
+export interface ChartWallet {
+  address: string;
+  label: string;
+  cohort?: string;
+  positionValueUsd?: number;
+  entryPx?: number;
+}
+
+interface Overlays {
+  youLine: boolean;
+  smLine: boolean;
+  buys: boolean;
+  sells: boolean;
+  windows: boolean;
+}
 
 interface Props {
   coin: string;
@@ -56,38 +79,35 @@ interface Props {
   height?: number;
   /** Value-weighted Smart Money entry known by the page (overlap data); wins over the API's. */
   smAvgEntry?: number | null;
-}
-
-/** One marker per candle and direction: several Smart Money fills on the same bar merge into
- * "3 reduces -$233" instead of stacking unreadable labels. */
-function groupMarkers(fills: ChartMarker[], candles: Candle[]): SeriesMarker<Time>[] {
-  const groups = new Map<string, { t: number; isAdd: boolean; usd: number; n: number; label: string }>();
-  for (const m of fills) {
-    const snapped = snapToCandle(candles, m.t);
-    if (snapped === null) continue;
-    const isAdd = m.action === "Open" || m.action === "Add";
-    const k = `${snapped}:${isAdd}`;
-    const g = groups.get(k) ?? { t: snapped, isAdd, usd: 0, n: 0, label: m.label };
-    g.usd += m.usd;
-    g.n += 1;
-    groups.set(k, g);
-  }
-  return [...groups.values()]
-    .sort((a, b) => a.t - b.t)
-    .map((g) => ({
-      time: toUTC(g.t) as unknown as Time,
-      position: g.isAdd ? "belowBar" : "aboveBar",
-      shape: g.isAdd ? "arrowUp" : "arrowDown",
-      color: g.isAdd ? THEME.up : THEME.down,
-      text: g.n > 1 ? `${g.n} ${g.isAdd ? "buys" : "reduces"} ${formatUsd(g.isAdd ? g.usd : -g.usd, { sign: true })}` : `${g.label} ${formatUsd(g.isAdd ? g.usd : -g.usd, { sign: true })}`,
-    }));
+  /** Smart Money wallets in this trade; each becomes fill bubbles, an entry-price avatar pinned
+   * on the axis, and a toggle chip in the legend below the chart. */
+  wallets?: ChartWallet[];
+  /** Wallets hidden by the page itself (e.g. an already-muted wallet); merges with the chart's
+   * own per-wallet legend toggle. */
+  hiddenWallets?: string[];
+  /** The price-line label for the viewed position: "You" on /me, "This wallet" on /w. */
+  entryLabel?: string;
 }
 
 /** "You vs Smart Money": a live candlestick chart for one coin with the user's entry, the
- * value-weighted Smart Money entry, Smart Money fill markers, and a shaded band after each
- * Smart Money reduce for as long as the exit window stayed open. */
-export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgProp }: Props) {
+ * value-weighted Smart Money entry, Smart Money fills as avatar bubbles (fomo.xyz-style, sized
+ * by USD and colored by buy/sell) instead of text markers, each tracked wallet's entry pinned on
+ * the price axis, and a shaded band after each Smart Money reduce for as long as the exit window
+ * stayed open. */
+export function PositionChart({
+  coin,
+  address,
+  height = 360,
+  smAvgEntry: smAvgProp,
+  wallets,
+  hiddenWallets,
+  entryLabel = "You",
+}: Props) {
   const [tf, setTf] = useState<Timeframe>("1d");
+  const [overlays, setOverlays] = useState<Overlays>({ youLine: true, smLine: true, buys: true, sells: true, windows: true });
+  const [minSize, setMinSize] = useState<MinSizeFilter>("any");
+  const [localToggled, setLocalToggled] = useState<Set<string>>(() => new Set());
+
   const url = useMemo(() => {
     const q = new URLSearchParams({ tf });
     if (address) q.set("address", address);
@@ -97,15 +117,54 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const bandsRef = useRef<HTMLDivElement | null>(null);
+  const bubblesRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const markersApiRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const youLineRef = useRef<IPriceLine | null>(null);
   const smLineRef = useRef<IPriceLine | null>(null);
   const bandsDataRef = useRef<{ candles: Candle[]; windows: WindowBand[] }>({ candles: [], windows: [] });
+  const bubbleDataRef = useRef<{ candles: Candle[]; fills: ChartMarker[]; wallets: ChartWallet[] }>({ candles: [], fills: [], wallets: [] });
   const fittedTfRef = useRef<Timeframe | null>(null);
   // Price lines do not take part in autoscale; the provider below reads these so both stay in view.
   const linesRef = useRef<number[]>([]);
+
+  // hiddenWallets (the page's own hidden list) XOR the chart's local legend toggle: toggling a
+  // wallet that's hidden by the page shows it again, toggling a visible one hides it.
+  const hiddenSet = useMemo(() => {
+    const s = new Set((hiddenWallets ?? []).map((a) => a.toLowerCase()));
+    for (const a of localToggled) {
+      if (s.has(a)) s.delete(a);
+      else s.add(a);
+    }
+    return s;
+  }, [hiddenWallets, localToggled]);
+
+  const toggleWallet = useCallback((addr: string) => {
+    const a = addr.toLowerCase();
+    setLocalToggled((prev) => {
+      const next = new Set(prev);
+      if (next.has(a)) next.delete(a);
+      else next.add(a);
+      return next;
+    });
+  }, []);
+
+  const filteredFills = useMemo(() => {
+    if (!data) return [];
+    return data.smFills.filter((m) => {
+      if (hiddenSet.has(m.address.toLowerCase())) return false;
+      if (!passesMinSize(m.usd, minSize)) return false;
+      const isAdd = m.action === "Open" || m.action === "Add";
+      if (isAdd && !overlays.buys) return false;
+      if (!isAdd && !overlays.sells) return false;
+      return true;
+    });
+  }, [data, overlays.buys, overlays.sells, minSize, hiddenSet]);
+
+  const filteredWallets = useMemo(
+    () => (wallets ?? []).filter((w) => w.entryPx && w.entryPx > 0 && !hiddenSet.has(w.address.toLowerCase())),
+    [wallets, hiddenSet],
+  );
 
   // Chart is created once per mount and torn down on unmount; coin/tf changes update data in
   // place so panning and zoom survive a live refresh.
@@ -147,9 +206,11 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
     });
     chartRef.current = chart;
     seriesRef.current = series;
-    markersApiRef.current = createSeriesMarkers(series, []);
 
-    const reposition = () => renderBands(chart, bandsRef.current, bandsDataRef.current.candles, bandsDataRef.current.windows);
+    const reposition = () => {
+      renderBands(chart, bandsRef.current, bandsDataRef.current.candles, bandsDataRef.current.windows);
+      renderBubbleLayer(chart, series, bubblesRef.current, bubbleDataRef.current.candles, bubbleDataRef.current.fills, bubbleDataRef.current.wallets);
+    };
     chart.timeScale().subscribeVisibleLogicalRangeChange(reposition);
     chart.timeScale().subscribeSizeChange(reposition);
 
@@ -157,16 +218,15 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
-      markersApiRef.current = null;
       youLineRef.current = null;
       smLineRef.current = null;
       fittedTfRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coin, height]);
 
-  // Data updates: candles, markers, price lines, exit-window bands. Runs on the initial load and
-  // every 15s live refresh without recreating the chart.
+  // Data + filter updates: candles, price lines, exit-window bands, fill bubbles and entry
+  // avatars. Runs on the initial load, every 15s live refresh, and every overlay/legend toggle,
+  // without recreating the chart.
   useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
@@ -176,7 +236,6 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
       data.candles.map((c) => ({ time: toUTC(c.t), open: c.o, high: c.h, low: c.l, close: c.c })),
     );
 
-    markersApiRef.current?.setMarkers(groupMarkers(data.smFills, data.candles));
     const smAvg = smAvgProp ?? data.smAvgEntry ?? null;
     linesRef.current = [data.yourEntry, smAvg].filter((v): v is number => typeof v === "number" && v > 0);
 
@@ -188,15 +247,16 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
             : data.yourEntry > smAvg
           : null;
       const color = worse === null ? THEME.text : worse ? THEME.down : THEME.up;
-      const title = `You ${formatPrice(data.yourEntry)}${data.yourSize !== undefined ? ` · ${data.yourSize.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${coin}` : ""}`;
-      if (youLineRef.current) youLineRef.current.applyOptions({ price: data.yourEntry, color, title });
+      const title = `${entryLabel} ${formatPrice(data.yourEntry)}${data.yourSize !== undefined ? ` · ${data.yourSize.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${coin}` : ""}`;
+      if (youLineRef.current) youLineRef.current.applyOptions({ price: data.yourEntry, color, title, lineVisible: overlays.youLine, axisLabelVisible: overlays.youLine });
       else
         youLineRef.current = series.createPriceLine({
           price: data.yourEntry,
           color,
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
+          axisLabelVisible: overlays.youLine,
+          lineVisible: overlays.youLine,
           title,
         });
     } else if (youLineRef.current) {
@@ -206,14 +266,15 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
 
     if (smAvg != null) {
       const title = `Smart Money avg ${formatPrice(smAvg)}`;
-      if (smLineRef.current) smLineRef.current.applyOptions({ price: smAvg, title });
+      if (smLineRef.current) smLineRef.current.applyOptions({ price: smAvg, title, lineVisible: overlays.smLine, axisLabelVisible: overlays.smLine });
       else
         smLineRef.current = series.createPriceLine({
           price: smAvg,
           color: THEME.text,
           lineWidth: 1,
           lineStyle: LineStyle.Dotted,
-          axisLabelVisible: true,
+          axisLabelVisible: overlays.smLine,
+          lineVisible: overlays.smLine,
           title,
         });
     } else if (smLineRef.current) {
@@ -221,14 +282,16 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
       smLineRef.current = null;
     }
 
-    bandsDataRef.current = { candles: data.candles, windows: data.windows };
-    renderBands(chart, bandsRef.current, data.candles, data.windows);
+    bandsDataRef.current = { candles: data.candles, windows: overlays.windows ? data.windows : [] };
+    bubbleDataRef.current = { candles: data.candles, fills: filteredFills, wallets: filteredWallets };
+    renderBands(chart, bandsRef.current, bandsDataRef.current.candles, bandsDataRef.current.windows);
+    renderBubbleLayer(chart, series, bubblesRef.current, bubbleDataRef.current.candles, bubbleDataRef.current.fills, bubbleDataRef.current.wallets);
 
     if (fittedTfRef.current !== tf) {
       chart.timeScale().fitContent();
       fittedTfRef.current = tf;
     }
-  }, [data, coin, tf, smAvgProp]);
+  }, [data, coin, tf, smAvgProp, entryLabel, overlays, filteredFills, filteredWallets]);
 
   const gap =
     data?.yourEntry !== undefined && (smAvgProp ?? data?.smAvgEntry) != null
@@ -242,7 +305,7 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
           <TokenCell coin={coin} />
           {data?.yourEntry !== undefined && (
             <span className={`fig text-[12px] ${gap === null ? "text-ink-2" : gap > 0.05 ? "text-late" : gap < -0.05 ? "text-lume" : "text-ink-2"}`}>
-              You {formatPrice(data.yourEntry)}
+              {entryLabel} {formatPrice(data.yourEntry)}
             </span>
           )}
           {(smAvgProp ?? data?.smAvgEntry) != null && <span className="fig text-[12px] text-ink-2">Smart Money avg {formatPrice((smAvgProp ?? data?.smAvgEntry)!)}</span>}
@@ -262,12 +325,13 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
         </div>
       </div>
       <div className="relative" style={{ height }}>
-        {/* lightweight-charts sets explicit z-index (1/2) on its own internal canvases. Neither
-         * div below otherwise creates a stacking context, so those inline z-indexes would escape
-         * this subtree and paint over the bands regardless of DOM order; giving each an explicit
-         * z-index here traps the chart's canvases inside its own context and keeps bands on top. */}
+        {/* lightweight-charts sets explicit z-index (1/2) on its own internal canvases. Divs
+         * below otherwise create no stacking context of their own, so those inline z-indexes
+         * would escape this subtree and paint over the bands/bubbles regardless of DOM order;
+         * giving each an explicit z-index here traps the chart's canvases inside its own context. */}
         <div ref={containerRef} className="absolute inset-0" style={{ zIndex: 0 }} />
         <div ref={bandsRef} className="absolute inset-0 pointer-events-none" style={{ zIndex: 1 }} />
+        <div ref={bubblesRef} className="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }} />
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-dial">
             <p className="text-[13px] text-ink-2">Chart data for {coin} is still loading.</p>
@@ -279,7 +343,59 @@ export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgPr
           </div>
         )}
       </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 border-t border-rule">
+        <span className="label">Chart overlays</span>
+        <OverlayToggle checked={overlays.youLine} onChange={() => setOverlays((o) => ({ ...o, youLine: !o.youLine }))} label={entryLabel === "You" ? "My entry" : `${entryLabel} entry`} />
+        <OverlayToggle checked={overlays.smLine} onChange={() => setOverlays((o) => ({ ...o, smLine: !o.smLine }))} label="Smart Money avg" />
+        <OverlayToggle checked={overlays.buys} onChange={() => setOverlays((o) => ({ ...o, buys: !o.buys }))} label="Buys" />
+        <OverlayToggle checked={overlays.sells} onChange={() => setOverlays((o) => ({ ...o, sells: !o.sells }))} label="Sells" />
+        <OverlayToggle checked={overlays.windows} onChange={() => setOverlays((o) => ({ ...o, windows: !o.windows }))} label="Exit windows" />
+        <label className="flex items-center gap-1.5 text-[12px] text-ink-2 ml-auto">
+          Min size
+          <select
+            value={minSize}
+            onChange={(e) => setMinSize(e.target.value as MinSizeFilter)}
+            className="bg-bezel border border-rule rounded-md text-[12px] text-ink px-1.5 py-1"
+          >
+            {MIN_SIZE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {wallets && wallets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-t border-rule">
+          <span className="label mr-1">Wallets</span>
+          {wallets.map((w) => {
+            const visible = !hiddenSet.has(w.address.toLowerCase());
+            return (
+              <button
+                key={w.address}
+                onClick={() => toggleWallet(w.address)}
+                aria-pressed={visible}
+                aria-label={`${visible ? "Hide" : "Show"} ${walletLabel(w.label, w.address)} on the chart`}
+                className={`chip chip-mute transition-opacity duration-150 motion-reduce:transition-none ${visible ? "" : "opacity-40"}`}
+              >
+                <WalletAvatar address={w.address} size={14} />
+                <span className="truncate max-w-[110px]">{walletLabel(w.label, w.address)}</span>
+                {w.positionValueUsd !== undefined && <span className="fig text-ink-3">{formatUsd(w.positionValueUsd)}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </section>
+  );
+}
+
+function OverlayToggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
+  return (
+    <label className="flex items-center gap-1.5 text-[12px] text-ink-2 cursor-pointer select-none">
+      <input type="checkbox" checked={checked} onChange={onChange} className="accent-accent size-3.5 rounded-sm" />
+      {label}
+    </label>
   );
 }
 
@@ -289,8 +405,8 @@ function formatPrice(n: number): string {
 
 /** Positions one translucent div per exit-window band using the chart's own time->x coordinate
  * mapping, so bands track panning and zoom without a custom chart primitive. timeToCoordinate
- * only maps times that land exactly on a bar, same as the marker plugin, so both edges are
- * snapped to a real candle first or they silently resolve to null and the band mis-renders. */
+ * only maps times that land exactly on a bar, same as priceToCoordinate for bubbles below, so
+ * both edges are snapped to a real candle first or they silently resolve to null and mis-render. */
 function renderBands(chart: IChartApi, host: HTMLDivElement | null, candles: Candle[], windows: WindowBand[]) {
   if (!host) return;
   host.replaceChildren();
@@ -311,5 +427,208 @@ function renderBands(chart: IChartApi, host: HTMLDivElement | null, candles: Can
     band.style.left = `${left}px`;
     band.style.width = `${right - left}px`;
     host.appendChild(band);
+  }
+}
+
+interface BubbleItem {
+  marker: ChartMarker;
+  x: number;
+  y: number;
+}
+
+function representativeItem(items: BubbleItem[]): BubbleItem {
+  return items.reduce((best, it) => (Math.abs(it.marker.usd) > Math.abs(best.marker.usd) ? it : best));
+}
+
+function bubbleAriaLabel(items: BubbleItem[]): string {
+  const rep = representativeItem(items);
+  const isAdd = rep.marker.action === "Open" || rep.marker.action === "Add";
+  const label = walletLabel(rep.marker.label, rep.marker.address);
+  const extra = items.length > 1 ? `, ${items.length} fills` : "";
+  return `${label} ${isAdd ? "buy" : "sell"} ${formatUsd(rep.marker.usd)}${extra}`;
+}
+
+function buildHoverCard(): HTMLDivElement {
+  const card = document.createElement("div");
+  card.className = "absolute z-10 panel px-3 py-2.5 text-[12px] w-56 pointer-events-auto";
+  card.style.display = "none";
+  return card;
+}
+
+function fillHoverCard(card: HTMLDivElement, items: BubbleItem[]) {
+  const rep = representativeItem(items);
+  const m = rep.marker;
+  const isAdd = m.action === "Open" || m.action === "Add";
+  const label = walletLabel(m.label, m.address);
+  const more = items.length - 1;
+  const totalUsd = items.reduce((a, it) => a + Math.abs(it.marker.usd), 0);
+
+  card.replaceChildren();
+
+  const head = document.createElement("div");
+  head.className = "flex items-center gap-2 mb-2";
+  const avatar = document.createElement("span");
+  avatar.className = "inline-block rounded-full shrink-0";
+  avatar.style.width = "20px";
+  avatar.style.height = "20px";
+  avatar.style.background = avatarBackground(m.address);
+  const names = document.createElement("span");
+  names.className = "min-w-0";
+  const nameEl = document.createElement("span");
+  nameEl.className = "block truncate text-ink text-[13px]";
+  nameEl.textContent = label;
+  const addrEl = document.createElement("span");
+  addrEl.className = "block fig text-ink-3 text-[11px]";
+  addrEl.textContent = shortAddr(m.address);
+  names.append(nameEl, addrEl);
+  head.append(avatar, names);
+
+  const chip = document.createElement("span");
+  chip.className = `chip ${isAdd ? "chip-lume" : "chip-late"} mb-2`;
+  chip.textContent = isAdd ? "Buy" : "Sell";
+
+  const rows = document.createElement("div");
+  rows.className = "fig text-[12px] text-ink-2 flex flex-col gap-1 mb-2";
+  const sizeRow = document.createElement("div");
+  sizeRow.textContent = `Size ${formatUsd(totalUsd)}`;
+  const priceRow = document.createElement("div");
+  priceRow.textContent = `Price ${formatPrice(m.px)}`;
+  const timeRow = document.createElement("div");
+  timeRow.textContent = formatDate(m.t);
+  rows.append(sizeRow, priceRow, timeRow);
+  if (more > 0) {
+    const moreRow = document.createElement("div");
+    moreRow.className = "text-ink-3";
+    moreRow.textContent = `+${more} more fill${more > 1 ? "s" : ""}`;
+    rows.appendChild(moreRow);
+  }
+
+  const link = document.createElement("a");
+  link.href = `/w/${m.address}`;
+  link.className = "text-accent text-[12px] hover:underline";
+  link.textContent = "Open wallet";
+
+  card.append(head, chip, rows, link);
+}
+
+/** Every Smart Money fill becomes a circular avatar bubble (WalletAvatar's own gradient, sized by
+ * USD, ring green for a buy/add and red for a reduce/close) at (fill time, fill price), plus a
+ * small avatar per tracked wallet pinned on the price-axis side at its entry. Overlapping bubbles
+ * within 14px cluster into one with a count badge. Re-run on data, filter, pan/zoom and resize. */
+function renderBubbleLayer(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  host: HTMLDivElement | null,
+  candles: Candle[],
+  fills: ChartMarker[],
+  wallets: ChartWallet[],
+) {
+  if (!host) return;
+  host.replaceChildren();
+  if (candles.length === 0) return;
+  const ts = chart.timeScale();
+
+  const positioned: BubbleItem[] = [];
+  for (const m of fills) {
+    const snapped = snapToCandle(candles, m.t);
+    if (snapped === null) continue;
+    const x = ts.timeToCoordinate(toUTC(snapped) as unknown as Time);
+    const y = series.priceToCoordinate(m.px);
+    if (x === null || y === null) continue;
+    positioned.push({ marker: m, x, y });
+  }
+
+  const card = buildHoverCard();
+  host.appendChild(card);
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  const cancelHide = () => {
+    if (hideTimer !== null) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  };
+  const scheduleHide = () => {
+    hideTimer = setTimeout(() => {
+      card.style.display = "none";
+    }, 150);
+  };
+  card.addEventListener("mouseenter", cancelHide);
+  card.addEventListener("mouseleave", scheduleHide);
+
+  const clusters = clusterBubbles(positioned, 14);
+  for (const cluster of clusters) {
+    const rep = representativeItem(cluster.items);
+    const isAdd = rep.marker.action === "Open" || rep.marker.action === "Add";
+    const totalUsd = cluster.items.reduce((a, it) => a + Math.abs(it.marker.usd), 0);
+    const size = bubbleSize(totalUsd);
+
+    const el = document.createElement("a");
+    el.href = `/w/${rep.marker.address}`;
+    el.tabIndex = 0;
+    el.setAttribute("aria-label", bubbleAriaLabel(cluster.items));
+    el.className =
+      "absolute rounded-full pointer-events-auto transition-transform duration-150 motion-reduce:transition-none hover:scale-110 focus-visible:scale-110";
+    el.style.left = `${cluster.x}px`;
+    el.style.top = `${cluster.y}px`;
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.transform = "translate(-50%, -50%)";
+    el.style.background = avatarBackground(rep.marker.address);
+    el.style.boxShadow = `0 0 0 2px ${isAdd ? THEME.up : THEME.down}`;
+
+    if (cluster.items.length > 1) {
+      const badge = document.createElement("span");
+      badge.className =
+        "absolute -top-1 -right-1 min-w-[14px] h-[14px] px-[3px] rounded-full bg-bezel border border-rule text-[9px] fig text-ink flex items-center justify-center";
+      badge.textContent = String(cluster.items.length);
+      el.appendChild(badge);
+    }
+
+    const show = () => {
+      cancelHide();
+      fillHoverCard(card, cluster.items);
+      card.style.display = "block";
+      const hostWidth = host.clientWidth;
+      const hostHeight = host.clientHeight;
+      const cardWidth = 224;
+      let left = cluster.x + 14;
+      if (left + cardWidth > hostWidth) left = cluster.x - cardWidth - 14;
+      left = Math.max(4, left);
+      let top = cluster.y - 10;
+      top = Math.max(4, Math.min(top, hostHeight - 140));
+      card.style.left = `${left}px`;
+      card.style.top = `${top}px`;
+    };
+    el.addEventListener("mouseenter", show);
+    el.addEventListener("focus", show);
+    el.addEventListener("mouseleave", scheduleHide);
+    el.addEventListener("blur", scheduleHide);
+    host.appendChild(el);
+  }
+
+  const axisWidth = chart.priceScale("right").width();
+  const totalWidth = host.clientWidth;
+  for (const w of wallets) {
+    if (!w.entryPx || w.entryPx <= 0) continue;
+    const y = series.priceToCoordinate(w.entryPx);
+    if (y === null) continue;
+    const x = totalWidth - axisWidth / 2;
+    const label = walletLabel(w.label, w.address);
+
+    const el = document.createElement("a");
+    el.href = `/w/${w.address}`;
+    el.tabIndex = 0;
+    el.title = `${label} entry ${formatPrice(w.entryPx)}`;
+    el.setAttribute("aria-label", `${label} entry ${formatPrice(w.entryPx)}`);
+    el.className =
+      "absolute rounded-full pointer-events-auto transition-transform duration-150 motion-reduce:transition-none hover:scale-110 focus-visible:scale-110";
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.width = "14px";
+    el.style.height = "14px";
+    el.style.transform = "translate(-50%, -50%)";
+    el.style.background = avatarBackground(w.address);
+    el.style.boxShadow = `0 0 0 2px ${THEME.entryRing}`;
+    host.appendChild(el);
   }
 }

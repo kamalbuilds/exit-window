@@ -149,6 +149,56 @@ function stubEpisode(direction: Direction, coin: string, reduceAt: number, reduc
   };
 }
 
+/** "Min size" overlay filter: any Smart Money fill/bubble below the threshold is hidden. */
+export type MinSizeFilter = "any" | "1k" | "10k" | "100k";
+
+const MIN_SIZE_THRESHOLDS: Record<MinSizeFilter, number> = { any: 0, "1k": 1_000, "10k": 10_000, "100k": 100_000 };
+
+export function passesMinSize(usd: number, filter: MinSizeFilter): boolean {
+  return Math.abs(usd) >= MIN_SIZE_THRESHOLDS[filter];
+}
+
+/** USD fill size -> bubble diameter, log-scaled (a $300 fill and a $300k fill both read as
+ * legible circles instead of one swallowing the chart). Ceiling: fixed $0..$1M scale, not
+ * relative to the fills actually on screen; revisit if a coin's fills cluster outside that band. */
+export function bubbleSize(usd: number, min = 18, max = 34): number {
+  const t = Math.log10(Math.abs(usd) + 1) / Math.log10(1_000_000);
+  const clamped = Math.min(1, Math.max(0, t));
+  return min + clamped * (max - min);
+}
+
+export interface ClusterPoint {
+  x: number;
+  y: number;
+}
+
+/** Greedy nearest-cluster grouping: a point joins the closest existing cluster within `radius`
+ * px of its running centroid, else starts a new one. Overlapping fill bubbles collapse into one
+ * with a count badge instead of stacking unreadably. */
+export function clusterBubbles<T extends ClusterPoint>(points: T[], radius = 14): { items: T[]; x: number; y: number }[] {
+  const clusters: { items: T[]; x: number; y: number }[] = [];
+  for (const p of points) {
+    let target: { items: T[]; x: number; y: number } | null = null;
+    let bestDist = Infinity;
+    for (const c of clusters) {
+      const d = Math.hypot(c.x - p.x, c.y - p.y);
+      if (d <= radius && d < bestDist) {
+        target = c;
+        bestDist = d;
+      }
+    }
+    if (target) {
+      target.items.push(p);
+      const n = target.items.length;
+      target.x += (p.x - target.x) / n;
+      target.y += (p.y - target.y) / n;
+    } else {
+      clusters.push({ items: [p], x: p.x, y: p.y });
+    }
+  }
+  return clusters;
+}
+
 /** Every Reduce/Close marker within the candle span becomes a shaded band from that reduce to
  * whenever price moved 1% against a holder (or the end of the visible candles, if it never did).
  * Dedupes same wallet + same instant so one trade reported by two sources doesn't double-band. */
