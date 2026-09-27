@@ -45,3 +45,13 @@ Read `ui-craft` / `design-md-pipeline` skill guidance first. Concept, render the
   - Exit style and realized vs paper PnL.
   - Follow panel: start following (client polls `/api/positions/[address]` every 20s, diff via the same logic as `diffPositions`), on a reduce show the countdown "Median window 14m, 11:32 left" and call `/api/mirror`. Paper ledger visible. Live mode badge only when the server reports keys present.
 - Every number on screen comes from the API. Loading, empty and error states are real states, not placeholders.
+
+## Real API facts (probed 11:25 UTC with the live key; samples in progress/api-docs/sample-*.json)
+
+- `profiler/perp-trades`: `side` is the POSITION side ("Long" | "Short"), not buy/sell. `action` in {"Open","Add","Reduce","Close"}. `start_position` is SIGNED (+ long, - short). Numbers are JSON numbers. A buy = (Long and Open/Add) or (Short and Reduce/Close).
+- One human exit arrives as dozens of fills within seconds (TWAP/iceberg). Group consecutive same-direction fills on the same coin within 120s into one tranche (size-weighted px).
+- A 30-day window often starts mid-position (first fill has start_position != 0). Such episodes have unknown entries: keep them for exit windows, exclude them from the latency backtest, and mark them.
+- Many top wallets only Add (accumulating). The home page should surface wallets that are actually exiting: `smart-money/perp-trades` {lookback_hours, pagination} returns labeled fills with action incl. "Reduce".
+- `profiler/perp-positions` returns `data.asset_positions[].position` with string numbers: token_symbol, size (signed), entry_price_usd, position_value_usd, unrealized_pnl_usd, leverage_value, liquidation_price_usd.
+- `perp-leaderboard` works with date-only range; labels like "HL Perps Whale", "Token Millionaire".
+- Coins include HIP-3 prefixed markets ("xyz:BRENTOIL", "io:NBIS"). Try candleSnapshot with the full name; if Hyperliquid returns nothing, skip that episode's window and say so in the report.
