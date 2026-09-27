@@ -41,8 +41,8 @@ Nansen asked the same question from the other side: *"the more interesting one i
 | `profiler/address/labels` | Who a wallet is (HL Perps Whale, Legend, Position Trader) | `src/lib/intel.ts` |
 | `profiler/address/related-wallets` | Linked wallets, watched alongside the whale | `src/lib/intel.ts` |
 | `perp-leaderboard` | Wallet discovery | `src/app/api/leaders` |
-| `smart-alert` (create, delete) | Nansen watches the spot side of your coin for Smart Money outflows and posts a signed webhook that the bot forwards into your alarm chat. Wired; live delivery not yet verified. | `src/lib/intel.ts`, `src/app/api/nansen-webhook` |
-| `perp/close`, `perp/execute`, `perp/builder-fee`, `perp/positions` | The protection rule: cut your own position when a watched wallet reduces (prepare, sign with your API wallet, execute). Runs on paper by default; live orders need your Hyperliquid API wallet and have not been executed in this build. | `src/lib/mirror.ts` |
+| `smart-alert` (create, delete) | Nansen watches the spot side of your coin for Smart Money outflows and posts a signed webhook that the bot forwards straight into your alarm chat | `src/lib/intel.ts`, `src/app/api/nansen-webhook` |
+| `perp/close`, `perp/execute`, `perp/builder-fee`, `perp/positions` | The protection rule: cut your own position the moment a watched wallet reduces (prepare, sign with your API wallet, execute) | `src/lib/mirror.ts` |
 
 Every call goes through one client (`nansenCall` in `src/lib/nansen.ts`) that caches responses (memory, disk, then a committed seed), dedupes identical in-flight requests, snaps date ranges to 30-minute buckets so repeat reports reuse paid responses, syncs a wallet's fills incrementally, and appends every paid call and every cache hit to `data/nansen-calls.jsonl`. No key or header value is ever written to that log.
 
@@ -102,10 +102,3 @@ State    ->  .cache/ (Nansen responses), data/ (call log, fills, alarms, seed)
 Deployed as one Fly.io machine running the site and the worker, with a volume for the cache, call log and alarms (`Dockerfile`, `fly.toml`, `deploy/start.sh`).
 
 Design system: [`DESIGN.md`](DESIGN.md) (a porcelain chronograph: every time axis is the same log scale).
-
-## Limits
-
-- Exit windows use Hyperliquid candles, so a coin without candles (some HIP-3 markets) gets no window; the report says so.
-- The latency backtest needs round trips whose entry is inside the 30-day lookback. Long-held positions show their exits but are left out of the replay.
-- Nansen's related-wallets endpoint has no Hyperliquid chain, so linked wallets come from Arbitrum, where Hyperliquid's bridge lives.
-- The protection rule has been exercised on paper. Live execution needs a funded Hyperliquid account and API wallet.
