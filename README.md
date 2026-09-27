@@ -13,7 +13,7 @@ Built for the Nansen Meridian Buildathon. Nansen is the data layer for every dec
 
 - Live: https://exit-window.fly.dev
 - Telegram bot: [@nansen_meridian_bot](https://t.me/nansen_meridian_bot)
-- Every Nansen call the product made: https://exit-window.fly.dev/calls and [`data/nansen-calls.jsonl`](data/nansen-calls.jsonl) (summary in [`docs/API-CALLS.md`](docs/API-CALLS.md))
+- Every Nansen call the live product made: https://exit-window.fly.dev/calls. Calls made while building it locally: [`data/nansen-calls.jsonl`](data/nansen-calls.jsonl), summarised in [`docs/API-CALLS.md`](docs/API-CALLS.md).
 
 ## Why
 
@@ -26,8 +26,6 @@ Copy traders keep saying the same thing:
 > "ignore what they bought, check what they DIDN'T sell" ([@MaxOnFumes](https://x.com/MaxOnFumes/status/2103566125560938688))
 
 Nansen asked the same question from the other side: *"the more interesting one is how, what they bought, when, how they sized it, when they got out"* ([@nansen_ai](https://x.com/nansen_ai/status/2076633833190068243)). Every other tool answers "who is buying". Exit Window answers "the wallet in your trade is leaving: how long do you have".
-
-More sources and the competitor review behind this choice: [`docs/signals.md`](docs/signals.md), [`progress/`](progress/).
 
 ## How Nansen drives it
 
@@ -43,8 +41,8 @@ More sources and the competitor review behind this choice: [`docs/signals.md`](d
 | `profiler/address/labels` | Who a wallet is (HL Perps Whale, Legend, Position Trader) | `src/lib/intel.ts` |
 | `profiler/address/related-wallets` | Linked wallets, watched alongside the whale | `src/lib/intel.ts` |
 | `perp-leaderboard` | Wallet discovery | `src/app/api/leaders` |
-| `smart-alert` (create, delete) | Nansen messages your Telegram directly when Smart Money pulls out of your coin on-chain | `src/lib/intel.ts` |
-| `perp/close`, `perp/execute`, `perp/builder-fee`, `perp/positions` | The protection rule: cut your own position when a watched wallet reduces (prepare, sign with your API wallet, execute) | `src/lib/mirror.ts` |
+| `smart-alert` (create, delete) | Nansen watches the spot side of your coin for Smart Money outflows and posts a signed webhook that the bot forwards into your alarm chat. Wired; live delivery not yet verified. | `src/lib/intel.ts`, `src/app/api/nansen-webhook` |
+| `perp/close`, `perp/execute`, `perp/builder-fee`, `perp/positions` | The protection rule: cut your own position when a watched wallet reduces (prepare, sign with your API wallet, execute). Runs on paper by default; live orders need your Hyperliquid API wallet and have not been executed in this build. | `src/lib/mirror.ts` |
 
 Every call goes through one client (`nansenCall` in `src/lib/nansen.ts`) that caches responses (memory, disk, then a committed seed), dedupes identical in-flight requests, snaps date ranges to 30-minute buckets so repeat reports reuse paid responses, syncs a wallet's fills incrementally, and appends every paid call and every cache hit to `data/nansen-calls.jsonl`. No key or header value is ever written to that log.
 
