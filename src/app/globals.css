@@ -1,27 +1,30 @@
-/* Hallmark · macrostructure: Chronograph bench · theme: porcelain dial, ink and vermilion
+/* Hallmark · macrostructure: Nansen-native app shell with screener tables · theme: dark terminal, green accent
  * Tokens mirror DESIGN.md. Components use these names, never raw hex. */
 @import "tailwindcss";
 
 @theme {
-  --color-paper: #f2eee5;
-  --color-dial: #fbf9f4;
-  --color-bezel: #e6e0d2;
-  --color-rule: #d2cbbb;
-  --color-ink: #16181c;
-  --color-ink-2: #474a51;
-  --color-ink-3: #686b72;
-  --color-window: #16181c1f;
-  --color-late: #c23a1e;
-  --color-late-wash: #c23a1e14;
-  --color-lume: #1e7349;
-  --color-lume-wash: #1e734914;
-  --color-focus: #16181c;
+  --color-paper: #0b1015;
+  --color-dial: #11181f;
+  --color-bezel: #17212a;
+  --color-rule: #222d38;
+  --color-ink: #e7ecf0;
+  --color-ink-2: #a3adb6;
+  --color-ink-3: #7c8892;
+  --color-accent: #3fd49a;
+  --color-accent-ink: #05231a;
+  --color-window: #3fd49a29;
+  --color-late: #f0616d;
+  --color-late-wash: #f0616d1a;
+  --color-lume: #3fd49a;
+  --color-lume-wash: #3fd49a1a;
+  --color-focus: #3fd49a;
 
-  --font-display: var(--font-bricolage), ui-sans-serif, sans-serif;
-  --font-body: var(--font-schibsted), ui-sans-serif, sans-serif;
-  --font-figure: var(--font-martian), ui-monospace, monospace;
+  --font-display: var(--font-geist), ui-sans-serif, sans-serif;
+  --font-body: var(--font-geist), ui-sans-serif, sans-serif;
+  --font-figure: var(--font-geist-mono), ui-monospace, monospace;
 
-  --radius-control: 2px;
+  --radius-control: 8px;
+  --radius-panel: 12px;
   --ease-draw: cubic-bezier(0.2, 0, 0, 1);
 }
 
@@ -34,7 +37,7 @@ body {
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-body);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
@@ -50,16 +53,14 @@ body {
   font-family: var(--font-body);
   font-weight: 500;
   font-size: 12px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--color-ink-3);
 }
 
 .display {
   font-family: var(--font-display);
   font-weight: 600;
-  line-height: 1.05;
-  letter-spacing: -0.02em;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
   font-style: normal;
   overflow-wrap: anywhere;
   min-width: 0;
@@ -107,4 +108,58 @@ a {
   .shimmer {
     animation: none;
   }
+}
+
+.panel {
+  background: var(--color-dial);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-panel);
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 600;
+  border-radius: var(--radius-control);
+  transition: filter 150ms;
+}
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+.btn-primary:disabled {
+  background: var(--color-bezel);
+  color: var(--color-ink-3);
+}
+.btn-secondary {
+  border: 1px solid var(--color-rule);
+  color: var(--color-ink);
+  border-radius: var(--radius-control);
+  transition: background-color 150ms;
+}
+.btn-secondary:hover {
+  background: var(--color-bezel);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.chip-lume {
+  background: var(--color-lume-wash);
+  color: var(--color-lume);
+}
+.chip-late {
+  background: var(--color-late-wash);
+  color: var(--color-late);
+}
+.chip-mute {
+  background: var(--color-bezel);
+  color: var(--color-ink-2);
 }

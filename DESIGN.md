@@ -1,93 +1,65 @@
-# DESIGN.md: Exit Window
+# DESIGN.md: Exit Window (v2, Nansen-native)
 
-Binding design system. Every colour, font, radius, spacing and motion value in the UI comes from here.
-Components reference tokens (`var(--color-ink)`), never raw hex.
+Binding design system. Exit Window is used by the same traders who live in Nansen's app, and it is judged by
+Nansen. It speaks Nansen's visual language: a dark app shell, left sidebar, top search, dense screener tables with
+token icons, pill tabs, green accent, mono figures. The one signature element that is ours: the exit dial.
 
-## Concept: Chronograph
-
-An exit window is a length of time, so the product is drawn as a watch. t = 0 is the moment a wallet
-first reduces a position. A sweeping arc on a porcelain dial runs until price has moved 1% against anyone
-still holding: that arc is the window. Copier delays (1m, 5m, 15m, 1h) are engraved on the bezel. A delay
-that lands inside the arc is lume green (out in time); one that lands past it is vermilion (you were the
-exit liquidity).
-
-The dial is logarithmic, 10 s at 12 o'clock to 24 h at 11 o'clock over a 330 degree sweep, so seconds,
-minutes and hours all get real space. Every time axis in the product (dials and strips) uses the same
-log scale: `pos = ln(t / 10s) / ln(86400s / 10s)`, clamped to [0, 1].
-
-## Macrostructure: Chronograph bench
-
-- Masthead strip: wordmark, live UTC clock, data source line, live Nansen call count from `/api/ledger`.
-- Home: 12-column split. Left 7 columns: the large live dial for the most recent Smart Money reduce
-  (second hand sweeping since that reduce). Right 5 columns: headline, one sentence, address input,
-  "Exiting now" lap list. Below: the timing tower of top wallets, two dense columns.
-- Report: identity band with the verdict as a sentence and the median window as the largest numeral on the
-  page. Left: dial of the median window with the four delay markers. Right: latency ladder. Then the exit
-  log (one log-scale strip per exit), open positions, and a Follow rail.
-- No hero + three cards. No card inside a card. Sections are divided by 1px rules and bezel bands, not
-  floating boxes.
+Components use the token names below (Tailwind theme: `bg-paper`, `bg-dial`, `bg-bezel`, `border-rule`, `text-ink`,
+`text-ink-2`, `text-ink-3`, `text-lume`, `text-late`, `bg-accent`), never raw hex.
 
 ## Colour
 
 | Token | Hex | Use | Contrast on paper |
 |---|---|---|---|
-| `--color-paper` | `#F2EEE5` | page ground (porcelain) | |
-| `--color-dial` | `#FBF9F4` | dial faces, input fields | |
-| `--color-bezel` | `#E6E0D2` | bezel bands, table header, raised strips | |
-| `--color-rule` | `#D2CBBB` | 1px rules, minor ticks | |
-| `--color-ink` | `#16181C` | text, hands, major ticks, open-window arc stroke | 16.3:1 |
-| `--color-ink-2` | `#474A51` | secondary text | 8.2:1 |
-| `--color-ink-3` | `#686B72` | labels, captions (>= 12px) | 4.9:1 |
-| `--color-window` | `#16181C1F` | open-window arc fill (ink at 12%) | |
-| `--color-late` | `#C23A1E` | window closed, late delay, exit liquidity, losses | 4.8:1 |
-| `--color-late-wash` | `#C23A1E14` | late row wash | |
-| `--color-lume` | `#1E7349` | out in time, gains | 5.4:1 |
-| `--color-lume-wash` | `#1E734914` | in-time wash | |
-| `--color-focus` | `#16181C` | 2px focus ring, offset 2px | |
+| `--color-paper` | `#0B1015` | app background | |
+| `--color-dial` | `#11181F` | panels, sidebar, table body, dial face | |
+| `--color-bezel` | `#17212A` | table header, hover rows, raised chips, dial bezel | |
+| `--color-rule` | `#222D38` | 1px borders and dividers | |
+| `--color-ink` | `#E7ECF0` | primary text, dial hands | 16.1:1 |
+| `--color-ink-2` | `#A3ADB6` | secondary text | 8.3:1 |
+| `--color-ink-3` | `#7C8892` | labels, captions (>= 12px) | 5.1:1 |
+| `--color-accent` | `#3FD49A` | primary buttons, active nav, active tab, links | 10.2:1 |
+| `--color-accent-ink` | `#05231A` | text on accent buttons | |
+| `--color-lume` | `#3FD49A` | gains, long, out in time | 10.2:1 |
+| `--color-lume-wash` | `#3FD49A1A` | green chip background | |
+| `--color-late` | `#F0616D` | losses, short, reduce, window closed, you were late | 5.6:1 |
+| `--color-late-wash` | `#F0616D1A` | red chip background | |
+| `--color-window` | `#3FD49A29` | the open exit window band on dials and strips | |
+| `--color-focus` | `#3FD49A` | 2px focus ring | |
 
-One accent family only (vermilion). Green is a status colour, never decoration. No gradients.
+No gradients except the flow bar fill. No purple.
 
 ## Type
 
-| Token | Family | Use |
-|---|---|---|
-| `--font-display` | Bricolage Grotesque (variable, opsz), 600 | headlines, verdict, the big window numeral |
-| `--font-body` | Schibsted Grotesk 400 / 500 | UI text, labels, paragraphs |
-| `--font-figure` | Martian Mono 400 / 500, `font-variant-numeric: tabular-nums` | every number, time, address, coin |
+- UI: Geist 400/500/600 (`--font-body`, and `--font-display` for page titles and big numbers).
+- Figures: Geist Mono with tabular numerals (`.fig`) for every price, size, USD value, percent, time and address.
+- Scale: 12 label, 13 table, 14 body, 16 lead, 20 panel title, 28 page title, 44 big figure.
+- Labels: 12px, ink-3, sentence case (no uppercase eyebrows except table headers, which are 12px ink-3).
 
-Scale (px): 12 label, 14 body-s, 16 body, 20 lead, 28 h3, 40 h2, 64 display, 112 dial numeral.
-Line height: 1.1 display, 1.45 body. Labels are 12px Schibsted 500, letter-spacing 0.06em, uppercase.
-Headings are roman only, never italic. Max text measure 62ch.
+## Layout: app shell
 
-## Space, radius, lines
-
-- Spacing scale: 4, 8, 12, 16, 24, 32, 48, 72, 112.
-- Radius: `--radius-control: 2px` for inputs, buttons, chips. Dials are circles. Nothing else is rounded.
-- Rules: 1px `--color-rule`. Major separators: 1px `--color-ink` at 100% (bezel edge).
-- Page max width 1320px, 32px gutters (16px under 640px).
+- Left sidebar 240px (collapses to a top bar under 1024px): wordmark, nav (Exiting now, Your trades, Wallets,
+  Alarms, Nansen calls), footer links (Telegram bot, GitHub, "Data: Nansen API").
+- Top bar 64px: page title, address search ("Paste a Hyperliquid address"), live UTC clock, green "Connect Telegram".
+- Content: panels on `--color-dial` with 1px `--color-rule` border, 12px radius, 20px padding. Page max width 1440px.
 
 ## Components
 
-- Dial (`Chronograph`): SVG, log-scale. Minor ticks at 30 s, 2 m, 10 m, 30 m, 2 h, 6 h, 12 h; major engraved
-  ticks with labels at 1m, 5m, 15m, 1h, 24h. Window arc: ink stroke 2px over `--color-window` fill band.
-  Delay markers: 10px circles on the bezel ring, lume if inside the window, late if past. Hand: 1.5px ink,
-  sweeps with real elapsed time. Centre readout: `--font-figure` elapsed, `--font-display` window length.
-- Exit strip: horizontal log axis, same scale as the dial, window band, 4 delay markers, adverse-move label.
-- Latency ladder: five rungs (0s, 1m, 5m, 15m, 1h), each rung shows copier return, tax and late share.
-  When the backtest has no eligible episodes it says why in one sentence; it never draws zeros.
-- Lap list: time since reduce, coin, wallet label, notional. Newest first. Rows link to the report.
-- Timing tower: rank, address, Nansen label, 30d PnL, ROI, in two dense columns on desktop.
-- Buttons: ink fill, paper text, 2px radius, 44px tall. Secondary: 1px ink outline.
-- Inputs: dial-white fill, 1px ink-3 border, 2px radius, Martian Mono text.
-- States: every fetch has loading (bezel shimmer off under reduced motion), empty and error states written as
-  sentences.
+- Token icon: 20px circle from `https://app.hyperliquid.xyz/coins/<COIN>.svg`, monogram fallback on error.
+- Screener table: 13px rows 44px tall, header on bezel with 12px ink-3 labels, numbers right-aligned in `.fig`,
+  row hover bezel, first column token icon + symbol.
+- Chips: 12px, 6px radius, wash background with coloured text (Long/Reduce/Close/Smart Money/Whale).
+- Pill tabs and timeframe pills: bezel group, active pill has rule border and accent text.
+- Flow bar: 96px x 4px track in rule colour, fill in lume or late.
+- Exit dial (signature): the log-scale chronograph (10 s to 24 h), dark face, green window band, red close tick,
+  delay markers green if in time, red if late.
+- Buttons: primary accent fill with accent-ink text, 8px radius, 36px tall; secondary 1px rule border.
 
 ## Motion
 
-- Dial hand: continuous sweep via requestAnimationFrame; under `prefers-reduced-motion` it steps once per second.
-- Arc draw on first paint: 700ms, `cubic-bezier(0.2, 0, 0, 1)`, disabled under reduced motion.
-- Hover: colour and underline only; no scale, no shadow lifts. Transitions list their properties explicitly.
+Only transform and opacity; 150ms colour transitions list their properties; dial hand sweeps via rAF and steps once a
+second under reduced motion.
 
 ## Copy
 
-Plain sentences, trader vocabulary. No em dashes. No invented numbers: every figure comes from the API.
+Plain trader language. No em dashes. Every number comes from Nansen or Hyperliquid.

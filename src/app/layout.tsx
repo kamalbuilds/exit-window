@@ -1,24 +1,22 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Martian_Mono, Schibsted_Grotesk } from "next/font/google";
-import { Masthead } from "@/components/Masthead";
+import { Geist, Geist_Mono } from "next/font/google";
+import { AppShell } from "@/components/shell/AppShell";
 import "./globals.css";
 
-const display = Bricolage_Grotesque({ variable: "--font-bricolage", subsets: ["latin"], weight: "variable" });
-const body = Schibsted_Grotesk({ variable: "--font-schibsted", subsets: ["latin"], weight: "variable" });
-const figure = Martian_Mono({ variable: "--font-martian", subsets: ["latin"], weight: "variable" });
+const sans = Geist({ variable: "--font-geist", subsets: ["latin"] });
+const mono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Exit Window: copy the exit, not the entry",
   description:
-    "How long you had after a Hyperliquid wallet started exiting, what copying it cost at your delay, and a live follow that mirrors its reduces. Built on the Nansen API.",
+    "Know when the Smart Money in your Hyperliquid trades starts selling: exit windows, Exit DNA and a Telegram exit alarm, built on the Nansen API.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable} ${figure.variable}`}>
-      <body className="min-h-dvh flex flex-col">
-        <Masthead />
-        {children}
+    <html lang="en" className={`${sans.variable} ${mono.variable}`}>
+      <body>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

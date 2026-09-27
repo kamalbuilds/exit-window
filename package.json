@@ -13,6 +13,7 @@
     "alarms": "tsx --env-file=.env scripts/alarm-worker.ts"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "motion": "^13.4.4",
     "next": "16.3.6",
     "react": "19.2.8",
