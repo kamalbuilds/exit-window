@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { EmptyState, ErrorState, LoadingRows } from "../States";
 import { type FeedItem } from "../feed";
-import { formatUsd, shortAddr, toMs } from "../format";
+import { formatUsd, shortAddr, toMs, walletLabel } from "../format";
 
 function ago(ms: number, now: number): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -37,7 +37,7 @@ export function LapList({ exits, loading, error, onRetry }: { exits: FeedItem[];
             <span className="min-w-0 truncate">
               <span className="fig text-[14px]">{f.token_symbol}</span>
               <span className="text-[13px] text-ink-3"> {f.side === "Long" ? "long" : "short"} reduced by </span>
-              <span className="text-[13px] text-ink-2">{f.trader_address_label ?? shortAddr(f.trader_address)}</span>
+              <span className="text-[13px] text-ink-2">{walletLabel(f.trader_address_label, f.trader_address)}</span>
             </span>
             <span className="fig text-[13px] text-ink-2 text-right">{formatUsd(f.value_usd)}</span>
           </Link>

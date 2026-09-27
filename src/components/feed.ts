@@ -6,6 +6,7 @@ export interface FeedItem {
   token_symbol: string;
   side: "Long" | "Short";
   action: string;
+  price?: number;
   price_usd?: number;
   value_usd: number;
 }

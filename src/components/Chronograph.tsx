@@ -161,7 +161,7 @@ export function Chronograph({
         })()}
       </svg>
       {children && (
-        <figcaption className="absolute inset-0 flex flex-col items-center justify-start text-center pointer-events-none px-[24%] pt-[54%]">
+        <figcaption className="absolute inset-0 flex flex-col items-center justify-start text-center pointer-events-none px-[26%] pt-[27%]">
           {children}
         </figcaption>
       )}

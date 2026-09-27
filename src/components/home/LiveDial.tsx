@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { WalletReport } from "@/lib/types";
 import { Chronograph } from "../Chronograph";
 import { type FeedItem } from "../feed";
-import { formatClock, formatMinutes, formatUsd, shortAddr, toMs } from "../format";
+import { formatClock, formatMinutes, formatUsd, shortAddr, toMs, walletLabel } from "../format";
 
 const CANDIDATES = 5;
 
@@ -84,12 +84,12 @@ export function LiveDial({ exits, loading }: { exits: FeedItem[]; loading: boole
   const exit = pick?.exit ?? null;
   const since = exit ? toMs(exit.timestamp) : null;
   const median = pick?.report?.medianWindowMin;
-  const who = exit ? (exit.trader_address_label ?? shortAddr(exit.trader_address)) : "";
+  const who = exit ? (walletLabel(exit.trader_address_label, exit.trader_address)) : "";
 
   return (
     <div className="flex flex-col gap-5">
       <Chronograph
-        size={600}
+        size={360}
         startedAt={since}
         windowMin={pick?.report ? (median ?? null) : undefined}
         title={exit ? `${who} started reducing ${exit.token_symbol}; live elapsed time against its measured exit window` : "Waiting for a live Smart Money exit"}
@@ -117,21 +117,16 @@ export function LiveDial({ exits, loading }: { exits: FeedItem[]; loading: boole
         )}
       </Chronograph>
 
-      {exit && (
-        <p className="text-[15px] text-ink-2 max-w-[60ch]">
-          <Link href={`/w/${exit.trader_address}`} className="text-ink font-medium underline decoration-rule hover:decoration-ink">
-            {who}
-          </Link>{" "}
-          just reduced a {exit.side.toLowerCase()} in <span className="fig text-ink">{exit.token_symbol}</span> worth{" "}
-          <span className="fig text-ink">{formatUsd(exit.value_usd)}</span>. The hand is the time since. A copier still holding
-          is safe while it sits inside the shaded window.
-        </p>
-      )}
-      <ul className="flex flex-wrap gap-x-6 gap-y-2 text-[13px] text-ink-2" aria-label="Legend">
-        <li className="flex items-center gap-2"><Dot tone="lume" /> delay lands inside the window</li>
-        <li className="flex items-center gap-2"><Dot tone="late" /> window closed first: you were the exit liquidity</li>
-        <li className="flex items-center gap-2"><span className="inline-block w-5 h-2 bg-window border-t border-ink" /> measured window</li>
-      </ul>
+      <p className="text-[12px] text-ink-3 flex flex-wrap items-center gap-x-4 gap-y-1" aria-label="Legend">
+        <span className="inline-flex items-center gap-1.5"><Dot tone="lume" /> in time</span>
+        <span className="inline-flex items-center gap-1.5"><Dot tone="late" /> late</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-2 bg-window border-t border-ink" /> window</span>
+        {exit && (
+          <Link href={`/w/${exit.trader_address}`} className="text-ink-2 underline decoration-rule hover:decoration-ink">
+            {who} reduced {exit.token_symbol} ({formatUsd(exit.value_usd)})
+          </Link>
+        )}
+      </p>
     </div>
   );
 }

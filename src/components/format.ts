@@ -96,3 +96,9 @@ export function unwrapEnvelope<T>(json: unknown): { data: T; fetchedAt: number |
   }
   return { data: json as T, fetchedAt: null, stale: false };
 }
+
+/** Nansen feed labels include referral-code tags ("Uses \"X\" HL Referral Code") that say nothing about the wallet. */
+export function walletLabel(label: string | null | undefined, address: string, fallback = "Smart Money wallet"): string {
+  if (!label || /^Uses ".*" HL Referral Code$/.test(label) || label === "High Balance") return fallback;
+  return label;
+}
