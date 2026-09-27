@@ -19,6 +19,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ address
       );
     }
     const message = err instanceof Error ? err.message : "overlap request failed";
+    console.error(`overlap ${address} failed: ${message}`);
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

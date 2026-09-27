@@ -391,10 +391,11 @@ async function acquireSlot(): Promise<() => void> {
 
 async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Promise<RawFetchResult> {
   const key = process.env.NANSEN_API_KEY;
+  // No key is the same as no credits to every caller: nothing can be paid for, so each route takes
+  // its cache, seed, sentinel and Hyperliquid fallbacks instead of failing. A fresh clone runs on
+  // the committed seed this way.
   if (!key) {
-    throw new NansenAuthError(
-      "NANSEN_API_KEY is not set. Add it to .env (never commit it, never log its value).",
-    );
+    throw new NansenCreditsError(endpoint, "NANSEN_API_KEY is not set, serving cached and Hyperliquid data only");
   }
   if (Date.now() < creditsExhaustedUntil) {
     throw new NansenCreditsError(endpoint, "credits exhausted, latched until retry window elapses");

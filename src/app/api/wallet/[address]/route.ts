@@ -29,6 +29,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ address:
       );
     }
     const message = err instanceof Error ? err.message : "wallet report failed";
+    console.error(`wallet report ${address} failed: ${message}`);
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }
