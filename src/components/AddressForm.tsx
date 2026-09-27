@@ -5,7 +5,17 @@ import { useState } from "react";
 
 const HEX_ADDR = /^0x[a-fA-F0-9]{40}$/;
 
-export function AddressForm({ initial = "" }: { initial?: string }) {
+export function AddressForm({
+  initial = "",
+  target = "me",
+  label = "Your Hyperliquid address",
+  cta = "Find my exits",
+}: {
+  initial?: string;
+  target?: "me" | "w";
+  label?: string;
+  cta?: string;
+}) {
   const router = useRouter();
   const [value, setValue] = useState(initial);
   const [touched, setTouched] = useState(false);
@@ -16,16 +26,16 @@ export function AddressForm({ initial = "" }: { initial?: string }) {
       onSubmit={(e) => {
         e.preventDefault();
         setTouched(true);
-        if (valid) router.push(`/w/${value.trim()}`);
+        if (valid) router.push(`/${target}/${value.trim()}`);
       }}
       className="w-full"
     >
-      <label htmlFor="wallet" className="label block mb-2">
-        Time a wallet
+      <label htmlFor={`wallet-${target}`} className="label block mb-2">
+        {label}
       </label>
       <div className="flex flex-col sm:flex-row gap-2">
         <input
-          id="wallet"
+          id={`wallet-${target}`}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="0x Hyperliquid address"
@@ -39,7 +49,7 @@ export function AddressForm({ initial = "" }: { initial?: string }) {
           type="submit"
           className="h-11 px-5 bg-ink text-paper font-medium text-[15px] rounded-[var(--radius-control)] whitespace-nowrap transition-[background-color] duration-150 hover:bg-ink-2"
         >
-          Start the clock
+          {cta}
         </button>
       </div>
       {touched && !valid ? (

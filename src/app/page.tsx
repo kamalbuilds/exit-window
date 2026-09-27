@@ -21,11 +21,15 @@ export default function Home() {
           <div>
             <h1 className="display text-[clamp(40px,6vw,68px)]">Copy the exit, not the entry.</h1>
             <p className="mt-4 text-[18px] text-ink-2 max-w-[46ch]">
-              Every copy trader gets the entry late. The damage is done on the way out. Exit Window measures how many
-              minutes a wallet leaves you after it starts selling, what copying it cost at your delay, and follows it live.
+              Copy traders get the entry late and give it all back on the way out. If you hold a position a whale also holds,
+              paste your address: Exit Window finds the Smart Money wallets in your trades, times how fast their exits turn
+              the price, and messages you on Telegram the moment one starts selling.
             </p>
           </div>
-          <AddressForm />
+          <AddressForm target="me" />
+          <p className="-mt-4 text-[13px] text-ink-3">
+            Not in a trade? Pick any wallet below to see how long its exits leave a copier.
+          </p>
           <div>
             <div className="flex items-baseline justify-between mb-2">
               <h2 className="label">Smart Money exiting now</h2>

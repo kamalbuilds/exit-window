@@ -112,3 +112,30 @@ export interface PositionChange {
   reducedFraction: number; // 0..1 of the previous size, for reduce/close
   at: number;
 }
+
+/** A labeled wallet holding the same coin and side as the user (Nansen tgm/perp-positions). */
+export interface Companion {
+  address: string;
+  label: string | null;
+  positionValueUsd: number;
+  size: number;
+  entryPx: number;
+  upnlUsd: number | null;
+  leverage: number | null;
+}
+
+/** GET /api/overlap/[address]: one row per open position of the user. */
+export interface OverlapRow {
+  coin: string;
+  direction: Direction;
+  size: number;
+  entryPx: number;
+  markPx: number | null;
+  companions: Companion[];
+}
+
+/** POST /api/alarm response. */
+export interface AlarmCreated {
+  code: string;
+  deepLink: string;
+}

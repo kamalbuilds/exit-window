@@ -110,7 +110,7 @@ export function FollowRail({ address, medianWindowMin }: { address: string; medi
     <aside className="bg-dial border border-ink" aria-label="Follow this wallet">
       <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-ink bg-bezel">
         <div>
-          <h2 className="display text-[22px]">Follow</h2>
+          <h2 className="display text-[22px]">Watch live</h2>
           <p className="text-[13px] text-ink-3">
             {live ? "Live: reduces are mirrored on your Hyperliquid account, capped." : "Paper: reduces are mirrored and recorded, nothing is sent."}
           </p>
@@ -150,6 +150,10 @@ export function FollowRail({ address, medianWindowMin }: { address: string; medi
         {following && nextPollIn !== null && (
           <p className="fig text-[12px] text-ink-3">next poll in {nextPollIn}s</p>
         )}
+
+        <p className="text-[13px] text-ink-2 border-t border-rule pt-4">
+          Holding the same coin as this wallet? Paste your address on the home page to get its exits on Telegram, even with this tab closed.
+        </p>
 
         <div>
           <h3 className="label mb-2">Mirror ledger</h3>
