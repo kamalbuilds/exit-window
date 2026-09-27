@@ -24,11 +24,11 @@ export async function getBotUsername(): Promise<string> {
   return cachedUsername;
 }
 
-export async function sendMessage(chatId: number | string, text: string): Promise<void> {
+export async function sendMessage(chatId: number | string, text: string, parseMode?: "HTML"): Promise<void> {
   const res = await fetch(`${apiBase()}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
+    body: JSON.stringify({ chat_id: chatId, text, ...(parseMode ? { parse_mode: parseMode } : {}) }),
   });
   if (!res.ok) throw new Error(`Telegram sendMessage ${res.status}`);
 }

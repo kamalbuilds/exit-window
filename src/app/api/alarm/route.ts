@@ -8,6 +8,7 @@ interface AlarmRequestWatch {
   coin: string;
   direction: Direction;
   label?: string | null;
+  protect?: { reducePct: number } | null;
 }
 
 interface AlarmRequestBody {
@@ -27,6 +28,10 @@ export async function POST(req: Request) {
       coin: w.coin,
       direction: w.direction,
       label: w.label ?? null,
+      protect:
+        w.protect && Number.isFinite(w.protect.reducePct) && w.protect.reducePct >= 1 && w.protect.reducePct <= 100
+          ? { reducePct: w.protect.reducePct }
+          : null,
     }));
     const record = createAlarmRecord(body.owner, watches);
     if (body.mirror) record.mirror = true;

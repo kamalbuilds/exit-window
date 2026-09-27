@@ -3,17 +3,30 @@ import {
   alarmsForChat,
   bindCode,
   createAlarmRecord,
+  distinctLeaderCount,
   dropWatch,
   formatAlarmMessage,
+  formatConsensusMessage,
   formatDropMessage,
+  formatOnboardingMessage,
+  formatProtectionLine,
+  formatTestMessage,
+  markHeld,
   ownerStillHolds,
+  pruneRecent,
   randomCode,
+  readExitDna,
+  setSmartAlertId,
+  shouldDropForClose,
   shouldFire,
+  smartAlertIdsForChat,
   unbindChat,
   type AlarmStore,
+  type RecentReduce,
   type Watch,
 } from "../src/lib/alarms";
-import type { OpenPosition, PositionChange } from "../src/lib/types";
+import type { MirrorResult } from "../src/lib/mirror";
+import type { OpenPosition, PositionChange, WalletReport } from "../src/lib/types";
 
 const AT = 1_700_000_000_000;
 
@@ -92,9 +105,9 @@ describe("formatAlarmMessage", () => {
 });
 
 describe("formatDropMessage", () => {
-  it("names the coin and the leader that is no longer watched", () => {
+  it("names the coin and the leader that is no longer watched, and says the coin was actually held", () => {
     const msg = formatDropMessage(watch({ leader: "0x1234567890abcdef" }));
-    expect(msg).toBe("You no longer hold ETH. Stopped watching 0x1234…cdef on it.");
+    expect(msg).toBe("You held ETH and have now closed it fully. Stopped watching 0x1234…cdef on it.");
   });
 });
 
@@ -147,5 +160,293 @@ describe("code binding", () => {
     const s: AlarmStore = { [record.code]: record };
     const updated = dropWatch(s, record.code, "ETH");
     expect(updated[record.code].watches.map((w) => w.coin)).toEqual(["BTC"]);
+  });
+});
+
+describe("owner-close logic", () => {
+  it("shouldDropForClose is false when the owner never held the coin (bind-time guard)", () => {
+    expect(shouldDropForClose(watch({ everHeld: undefined }), false)).toBe(false);
+  });
+
+  it("shouldDropForClose is false while the owner still holds the coin, even if everHeld", () => {
+    expect(shouldDropForClose(watch({ everHeld: true }), true)).toBe(false);
+  });
+
+  it("shouldDropForClose is true only once the owner held it and then fully closed it", () => {
+    expect(shouldDropForClose(watch({ everHeld: true }), false)).toBe(true);
+  });
+
+  it("markHeld flips everHeld true for the matching coin and leaves other watches untouched", () => {
+    const record = createAlarmRecord("0xowner", [watch({ coin: "ETH" }), watch({ coin: "BTC" })]);
+    const s: AlarmStore = { [record.code]: record };
+    const updated = markHeld(s, record.code, "ETH");
+    expect(updated[record.code].watches.find((w) => w.coin === "ETH")?.everHeld).toBe(true);
+    expect(updated[record.code].watches.find((w) => w.coin === "BTC")?.everHeld).toBeUndefined();
+  });
+
+  it("markHeld never flips an already-held watch back off, and is a no-op once already true", () => {
+    const record = createAlarmRecord("0xowner", [watch({ coin: "ETH", everHeld: true })]);
+    const s: AlarmStore = { [record.code]: record };
+    const updated = markHeld(s, record.code, "ETH");
+    expect(updated[record.code].watches[0].everHeld).toBe(true);
+  });
+
+  it("an owner==leader test alarm (everHeld unset, currently holding) never drops", () => {
+    // Mirrors data/alarms.json's STRK test alarm: owner === leader, so as soon as the owner's
+    // position shows up, holdsNow is true and the watch must never be dropped.
+    expect(shouldDropForClose(watch({ leader: "0xsame", everHeld: undefined }), true)).toBe(false);
+  });
+});
+
+describe("consensus grouping", () => {
+  function reduce(overrides: Partial<RecentReduce> = {}): RecentReduce {
+    return {
+      leader: "0xleader1",
+      label: "Leader One",
+      pctClosed: 30,
+      usdValue: 1000,
+      medianWindowMin: 20,
+      exitDna: null,
+      at: AT,
+      ...overrides,
+    };
+  }
+
+  it("pruneRecent drops entries older than the window, keeps recent ones", () => {
+    const entries = [reduce({ at: AT - 61 * 60_000 }), reduce({ at: AT - 10 * 60_000 })];
+    const kept = pruneRecent(entries, AT, 60 * 60_000);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].at).toBe(AT - 10 * 60_000);
+  });
+
+  it("pruneRecent keeps everything when nothing is older than the window - the check can fail", () => {
+    const entries = [reduce({ at: AT - 1000 }), reduce({ at: AT - 2000 })];
+    expect(pruneRecent(entries, AT, 60 * 60_000)).toHaveLength(2);
+  });
+
+  it("distinctLeaderCount counts unique leaders, not events", () => {
+    const history = [reduce({ leader: "0xa" }), reduce({ leader: "0xa" }), reduce({ leader: "0xb" })];
+    expect(distinctLeaderCount(history)).toBe(2);
+  });
+
+  it("formatConsensusMessage leads with 'N of M Smart Money wallets ... reduced in the last hour'", () => {
+    const msg = formatConsensusMessage({
+      coin: "STRK",
+      direction: "long",
+      totalWatched: 5,
+      events: [
+        reduce({ leader: "0xa", label: "A", pctClosed: 40, usdValue: 2000, medianWindowMin: 15 }),
+        reduce({ leader: "0xb", label: "B", pctClosed: 20, usdValue: 500, medianWindowMin: 30, exitDna: "Scaler, nuclear last leg." }),
+        reduce({ leader: "0xc", label: null, pctClosed: 100, usdValue: 900, medianWindowMin: null }),
+      ],
+      ownerSize: 12,
+      appUrl: "https://exit-window.example",
+    });
+    expect(msg).toContain("3 of 5 Smart Money wallets in your STRK long reduced in the last hour.");
+    expect(msg).toContain("A: reduced by 40% ($2,000), median 15 min window.");
+    expect(msg).toContain("Scaler, nuclear last leg.");
+    expect(msg).toContain("You hold 12 STRK");
+  });
+
+  it("formatConsensusMessage appends the protection line when given one", () => {
+    const msg = formatConsensusMessage({
+      coin: "STRK",
+      direction: "long",
+      totalWatched: 2,
+      events: [reduce({ leader: "0xa" }), reduce({ leader: "0xb" })],
+      ownerSize: 1,
+      appUrl: "https://x.example",
+      protectionLine: "Protection rule: Paper mode would close 1.0000 STRK (~$100).",
+    });
+    expect(msg).toContain("Protection rule: Paper mode would close 1.0000 STRK");
+  });
+});
+
+describe("formatProtectionLine", () => {
+  function mirrorResult(overrides: Partial<MirrorResult> = {}): MirrorResult {
+    return {
+      mode: "paper",
+      coin: "STRK",
+      direction: "long",
+      followerSizeBefore: 10,
+      sizeToClose: 2,
+      price: 0.5,
+      usdValue: 1,
+      capped: false,
+      executed: false,
+      ...overrides,
+    };
+  }
+
+  it("reports paper mode with the size and USD value it would close", () => {
+    const line = formatProtectionLine(mirrorResult());
+    expect(line).toBe("Protection rule: Paper mode would close 2.0000 STRK (~$1).");
+  });
+
+  it("reports live mode as closed once executed", () => {
+    const line = formatProtectionLine(mirrorResult({ mode: "live", executed: true }));
+    expect(line).toContain("Live mode closed 2.0000 STRK");
+  });
+
+  it("notes when the size was capped by MIRROR_MAX_USD", () => {
+    expect(formatProtectionLine(mirrorResult({ capped: true }))).toContain("(capped by MIRROR_MAX_USD)");
+  });
+
+  it("reports a refusal reason verbatim instead of a size, when one exists", () => {
+    const line = formatProtectionLine(mirrorResult({ refusalReason: "no live mid price for STRK" }));
+    expect(line).toBe("Protection rule: not triggered - no live mid price for STRK");
+  });
+});
+
+describe("readExitDna", () => {
+  function baseReport(): WalletReport {
+    return {
+      address: "0xabc",
+      label: null,
+      generatedAt: AT,
+      lookbackDays: 30,
+      episodesAnalyzed: 1,
+      exitStyle: "scaler",
+      medianWindowMin: 12,
+      windows: [],
+      latency: [],
+      maxSafeLatencySec: null,
+      verdict: "tight",
+      realizedPnlUsd: null,
+      unrealizedPnlUsd: null,
+      episodes: [],
+      openPositions: [],
+      nansenCalls: 0,
+      backtestEligible: 0,
+      backtestNote: null,
+    };
+  }
+
+  it("returns null when the report has no exitDna field at all", () => {
+    expect(readExitDna(baseReport())).toBeNull();
+  });
+
+  it("reads a string exitDna field when the report carries one", () => {
+    const report = { ...baseReport(), exitDna: "Scaler: usually 3 reduces before flat." } as WalletReport;
+    expect(readExitDna(report)).toBe("Scaler: usually 3 reduces before flat.");
+  });
+
+  it("ignores a non-string or blank exitDna instead of crashing", () => {
+    expect(readExitDna({ ...baseReport(), exitDna: 42 } as WalletReport)).toBeNull();
+    expect(readExitDna({ ...baseReport(), exitDna: "   " } as WalletReport)).toBeNull();
+  });
+});
+
+describe("formatTestMessage", () => {
+  it("is clearly labeled as a test and never claims a reduce happened", () => {
+    const msg = formatTestMessage({
+      watch: watch(),
+      leaderPosition: { coin: "ETH", direction: "long", size: 4, entryPx: 2500, markPx: null, unrealizedPnlUsd: null, leverage: null },
+      medianWindowMin: 18,
+      appUrl: "https://exit-window.example",
+    });
+    expect(msg).toContain("Test alert");
+    expect(msg).not.toMatch(/reduced your|started exiting your|closed your/);
+    expect(msg).toContain("Leader One currently holds 4 ETH (long)");
+    expect(msg).toContain("median 18 min");
+  });
+
+  it("still labels itself a test when the leader has no open position", () => {
+    const msg = formatTestMessage({
+      watch: watch(),
+      leaderPosition: null,
+      medianWindowMin: null,
+      appUrl: "https://x.example",
+    });
+    expect(msg).toContain("Test alert");
+    expect(msg).toContain("has no open ETH position right now");
+  });
+});
+
+describe("formatOnboardingMessage", () => {
+  it("returns a placeholder when there are no watches yet", () => {
+    expect(formatOnboardingMessage([], "https://x.example")).toContain("No watches bound");
+  });
+
+  it("links the leader label to the wallet report, shows position, window, entry gap, protection and commands", () => {
+    const msg = formatOnboardingMessage(
+      [
+        {
+          watch: watch({ leader: "0xleaderaddress000000000000000000000000", protect: { reducePct: 25 } }),
+          leaderPosition: { coin: "ETH", direction: "long", size: 4, entryPx: 2000, markPx: null, unrealizedPnlUsd: null, leverage: null },
+          leaderMarkPx: 2100,
+          medianWindowMin: 14,
+          exitDna: "Scaler, usually 2-3 reduces before flat.",
+          ownerPosition: { coin: "ETH", direction: "long", size: 1, entryPx: 2200, markPx: null, unrealizedPnlUsd: null, leverage: null },
+        },
+      ],
+      "https://exit-window.example",
+    );
+    expect(msg).toContain('<a href="https://exit-window.example/w/0xleaderaddress000000000000000000000000">Leader One</a>');
+    expect(msg).toContain("4 ETH (~$8,400), entry $2000");
+    expect(msg).toContain("Median exit window: 14 min");
+    expect(msg).toContain("Scaler, usually 2-3 reduces before flat.");
+    expect(msg).toContain("You entered 10.0% above this wallet.");
+    expect(msg).toContain("Protection: on a reduce, cut your position 25%.");
+    expect(msg).toContain("/list");
+    expect(msg).toContain("/stop");
+    expect(msg).toContain("/test");
+  });
+
+  it("falls back to a short address when the watch has no label", () => {
+    const msg = formatOnboardingMessage(
+      [
+        {
+          watch: watch({ leader: "0x1234567890abcdef", label: null }),
+          leaderPosition: null,
+          leaderMarkPx: null,
+          medianWindowMin: null,
+          exitDna: null,
+          ownerPosition: null,
+        },
+      ],
+      "https://x.example",
+    );
+    expect(msg).toContain(">0x1234…cdef<");
+    expect(msg).toContain("not currently open on ETH");
+  });
+
+  it("appends the smart-alert mention for a created alert and the skip reason for a skipped one", () => {
+    const msg = formatOnboardingMessage(
+      [
+        {
+          watch: watch(),
+          leaderPosition: null,
+          leaderMarkPx: null,
+          medianWindowMin: null,
+          exitDna: null,
+          ownerPosition: null,
+        },
+      ],
+      "https://x.example",
+      [
+        { coin: "ETH", direction: "long", status: "created", detail: "alert-123" },
+        { coin: "xyz:BRENTOIL", direction: "long", status: "skipped", detail: "no resolvable spot token" },
+      ],
+    );
+    expect(msg).toContain("Nansen will also message you directly if Smart Money pulls out of ETH on-chain.");
+    expect(msg).toContain("Nansen on-chain alert skipped for xyz:BRENTOIL: no resolvable spot token");
+  });
+});
+
+describe("smart alert store helpers", () => {
+  it("setSmartAlertId records the id under its coin without touching other alarms", () => {
+    const record = createAlarmRecord("0xowner", [watch({ coin: "ETH" })]);
+    const s: AlarmStore = { [record.code]: record };
+    const updated = setSmartAlertId(s, record.code, "ETH", "alert-1");
+    expect(updated[record.code].smartAlerts).toEqual({ ETH: "alert-1" });
+  });
+
+  it("smartAlertIdsForChat collects ids across every alarm bound to that chat", () => {
+    const a = { ...createAlarmRecord("0xowner", [watch({ coin: "ETH" })]), chatId: 555, smartAlerts: { ETH: "alert-1" } };
+    const b = { ...createAlarmRecord("0xowner", [watch({ coin: "BTC" })]), chatId: 555, smartAlerts: { BTC: "alert-2" } };
+    const c = { ...createAlarmRecord("0xowner", [watch({ coin: "SOL" })]), chatId: 999, smartAlerts: { SOL: "alert-3" } };
+    const s: AlarmStore = { [a.code]: a, [b.code]: b, [c.code]: c };
+    expect(smartAlertIdsForChat(s, 555).sort()).toEqual(["alert-1", "alert-2"]);
   });
 });
