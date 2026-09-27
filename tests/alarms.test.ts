@@ -144,6 +144,14 @@ describe("code binding", () => {
     expect(bound?.store[code].chatId).toBe(555);
   });
 
+  it("refuses a code already bound to another chat, and allows the same chat again", () => {
+    const s = store();
+    const code = Object.keys(s)[0];
+    const first = bindCode(s, code, 555)!;
+    expect(bindCode(first.store, code, 999)).toBeNull();
+    expect(bindCode(first.store, code, 555)?.record.chatId).toBe(555);
+  });
+
   it("returns null for an unknown code, leaving the store untouched", () => {
     const s = store();
     expect(bindCode(s, "NOPE-CODE", 555)).toBeNull();

@@ -203,6 +203,10 @@ export function bindCode(
 ): { store: AlarmStore; record: AlarmRecord } | null {
   const record = store[code];
   if (!record) return null;
+  // A code is single-use: once bound, it never moves to another chat, so a code seen in a
+  // screenshot or video can't be replayed to take over someone's alarm. Re-sending it from the
+  // same chat stays harmless.
+  if (record.chatId !== null && record.chatId !== chatId) return null;
   const updated: AlarmRecord = { ...record, chatId };
   return { store: { ...store, [code]: updated }, record: updated };
 }
