@@ -10,7 +10,7 @@
     "test": "vitest run",
     "cache:seed": "node scripts/cache-seed.mjs",
     "calls:report": "node scripts/calls-report.mjs",
-    "alarms": "tsx scripts/alarm-worker.ts"
+    "alarms": "tsx --env-file=.env scripts/alarm-worker.ts"
   },
   "dependencies": {
     "motion": "^13.4.4",
