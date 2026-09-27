@@ -50,6 +50,13 @@ interface Pressure {
   read: string;
 }
 
+/** Value-weighted Smart Money entry on the same side as the user. */
+function smAvgEntry(row: OverlapRow): number | null {
+  const cs = row.companions.filter((c) => c.entryPx > 0 && c.positionValueUsd > 0);
+  const w = cs.reduce((a, c) => a + c.positionValueUsd, 0);
+  return w ? cs.reduce((a, c) => a + c.entryPx * c.positionValueUsd, 0) / w : null;
+}
+
 /** Your entry vs the value-weighted Smart Money entry on the same side. Positive = you paid worse. */
 function entryGapPct(row: OverlapRow): number | null {
   const cs = row.companions.filter((c) => c.entryPx > 0 && c.positionValueUsd > 0);
@@ -298,14 +305,16 @@ function PositionRows({
           {top ? (
             <span className={`fig text-[12px] ${windowClass}`}>{windowStatusText(topWindow)}</span>
           ) : (
-            <span className="text-[12px] text-ink-3">no companions to time</span>
+            <span className="text-[12px] text-ink-3">no Smart Money in this market</span>
           )}
         </td>
         <td className="px-3 h-11 text-right whitespace-nowrap hidden md:table-cell">
           {p ? (
             <span className={`chip ${p.pressure === "high" ? "chip-late" : "chip-mute"}`}>{p.pressure}</span>
+          ) : row.companions.length === 0 ? (
+            <span className="fig text-[12px] text-ink-3">n/a</span>
           ) : (
-            <span className="fig text-[12px] text-ink-3">timing</span>
+            <span className="fig text-[12px] text-ink-3">reading</span>
           )}
         </td>
         <td className="pr-3 h-11 w-10 text-right">
@@ -362,7 +371,7 @@ function PositionDetail({
           {pressure.read}
         </p>
       )}
-      <PositionChart coin={row.coin} address={address} height={360} />
+      <PositionChart coin={row.coin} address={address} height={360} smAvgEntry={smAvgEntry(row)} />
       <CohortBar coin={row.coin} />
       {row.companions.length === 0 ? (
         <p className="text-[13px] text-ink-2 border-t border-rule pt-3">

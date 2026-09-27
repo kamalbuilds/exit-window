@@ -49,30 +49,44 @@ function snapToCandle(candles: Candle[], t: number): number | null {
   return best ?? candles[candles.length - 1].t;
 }
 
-function markerFor(m: ChartMarker, candles: Candle[]): SeriesMarker<Time> | null {
-  const snapped = snapToCandle(candles, m.t);
-  if (snapped === null) return null;
-  const isAdd = m.action === "Open" || m.action === "Add";
-  const signedUsd = isAdd ? m.usd : -m.usd;
-  return {
-    time: toUTC(snapped) as unknown as Time,
-    position: isAdd ? "belowBar" : "aboveBar",
-    shape: isAdd ? "arrowUp" : "arrowDown",
-    color: isAdd ? THEME.up : THEME.down,
-    text: `${m.label} ${formatUsd(signedUsd, { sign: true })}`,
-  };
-}
 
 interface Props {
   coin: string;
   address?: string;
   height?: number;
+  /** Value-weighted Smart Money entry known by the page (overlap data); wins over the API's. */
+  smAvgEntry?: number | null;
+}
+
+/** One marker per candle and direction: several Smart Money fills on the same bar merge into
+ * "3 reduces -$233" instead of stacking unreadable labels. */
+function groupMarkers(fills: ChartMarker[], candles: Candle[]): SeriesMarker<Time>[] {
+  const groups = new Map<string, { t: number; isAdd: boolean; usd: number; n: number; label: string }>();
+  for (const m of fills) {
+    const snapped = snapToCandle(candles, m.t);
+    if (snapped === null) continue;
+    const isAdd = m.action === "Open" || m.action === "Add";
+    const k = `${snapped}:${isAdd}`;
+    const g = groups.get(k) ?? { t: snapped, isAdd, usd: 0, n: 0, label: m.label };
+    g.usd += m.usd;
+    g.n += 1;
+    groups.set(k, g);
+  }
+  return [...groups.values()]
+    .sort((a, b) => a.t - b.t)
+    .map((g) => ({
+      time: toUTC(g.t) as unknown as Time,
+      position: g.isAdd ? "belowBar" : "aboveBar",
+      shape: g.isAdd ? "arrowUp" : "arrowDown",
+      color: g.isAdd ? THEME.up : THEME.down,
+      text: g.n > 1 ? `${g.n} ${g.isAdd ? "buys" : "reduces"} ${formatUsd(g.isAdd ? g.usd : -g.usd, { sign: true })}` : `${g.label} ${formatUsd(g.isAdd ? g.usd : -g.usd, { sign: true })}`,
+    }));
 }
 
 /** "You vs Smart Money": a live candlestick chart for one coin with the user's entry, the
  * value-weighted Smart Money entry, Smart Money fill markers, and a shaded band after each
  * Smart Money reduce for as long as the exit window stayed open. */
-export function PositionChart({ coin, address, height = 360 }: Props) {
+export function PositionChart({ coin, address, height = 360, smAvgEntry: smAvgProp }: Props) {
   const [tf, setTf] = useState<Timeframe>("1d");
   const url = useMemo(() => {
     const q = new URLSearchParams({ tf });
@@ -90,6 +104,8 @@ export function PositionChart({ coin, address, height = 360 }: Props) {
   const smLineRef = useRef<IPriceLine | null>(null);
   const bandsDataRef = useRef<{ candles: Candle[]; windows: WindowBand[] }>({ candles: [], windows: [] });
   const fittedTfRef = useRef<Timeframe | null>(null);
+  // Price lines do not take part in autoscale; the provider below reads these so both stay in view.
+  const linesRef = useRef<number[]>([]);
 
   // Chart is created once per mount and torn down on unmount; coin/tf changes update data in
   // place so panning and zoom survive a live refresh.
@@ -116,6 +132,18 @@ export function PositionChart({ coin, address, height = 360 }: Props) {
       // Smart Money price lines and read as a third, unlabeled line.
       lastValueVisible: false,
       priceLineVisible: false,
+      autoscaleInfoProvider: (original: () => { priceRange: { minValue: number; maxValue: number }; margins?: unknown } | null) => {
+        const r = original();
+        const lines = linesRef.current;
+        if (!r || lines.length === 0) return r;
+        return {
+          ...r,
+          priceRange: {
+            minValue: Math.min(r.priceRange.minValue, ...lines),
+            maxValue: Math.max(r.priceRange.maxValue, ...lines),
+          },
+        };
+      },
     });
     chartRef.current = chart;
     seriesRef.current = series;
@@ -148,15 +176,16 @@ export function PositionChart({ coin, address, height = 360 }: Props) {
       data.candles.map((c) => ({ time: toUTC(c.t), open: c.o, high: c.h, low: c.l, close: c.c })),
     );
 
-    const markers = data.smFills.map((m) => markerFor(m, data.candles)).filter((m): m is SeriesMarker<Time> => m !== null);
-    markersApiRef.current?.setMarkers(markers);
+    markersApiRef.current?.setMarkers(groupMarkers(data.smFills, data.candles));
+    const smAvg = smAvgProp ?? data.smAvgEntry ?? null;
+    linesRef.current = [data.yourEntry, smAvg].filter((v): v is number => typeof v === "number" && v > 0);
 
     if (data.yourEntry !== undefined) {
       const worse =
-        data.smAvgEntry !== undefined
+        smAvg != null
           ? data.yourDirection === "short"
-            ? data.yourEntry < data.smAvgEntry
-            : data.yourEntry > data.smAvgEntry
+            ? data.yourEntry < smAvg
+            : data.yourEntry > smAvg
           : null;
       const color = worse === null ? THEME.text : worse ? THEME.down : THEME.up;
       const title = `You ${formatPrice(data.yourEntry)}${data.yourSize !== undefined ? ` · ${data.yourSize.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${coin}` : ""}`;
@@ -175,12 +204,12 @@ export function PositionChart({ coin, address, height = 360 }: Props) {
       youLineRef.current = null;
     }
 
-    if (data.smAvgEntry !== undefined) {
-      const title = `Smart Money avg ${formatPrice(data.smAvgEntry)}`;
-      if (smLineRef.current) smLineRef.current.applyOptions({ price: data.smAvgEntry, title });
+    if (smAvg != null) {
+      const title = `Smart Money avg ${formatPrice(smAvg)}`;
+      if (smLineRef.current) smLineRef.current.applyOptions({ price: smAvg, title });
       else
         smLineRef.current = series.createPriceLine({
-          price: data.smAvgEntry,
+          price: smAvg,
           color: THEME.text,
           lineWidth: 1,
           lineStyle: LineStyle.Dotted,
@@ -199,11 +228,11 @@ export function PositionChart({ coin, address, height = 360 }: Props) {
       chart.timeScale().fitContent();
       fittedTfRef.current = tf;
     }
-  }, [data, coin, tf]);
+  }, [data, coin, tf, smAvgProp]);
 
   const gap =
-    data?.yourEntry !== undefined && data?.smAvgEntry !== undefined
-      ? ((data.yourEntry - data.smAvgEntry) / data.smAvgEntry) * 100 * (data.yourDirection === "short" ? -1 : 1)
+    data?.yourEntry !== undefined && (smAvgProp ?? data?.smAvgEntry) != null
+      ? ((data.yourEntry - (smAvgProp ?? data.smAvgEntry)!) / (smAvgProp ?? data.smAvgEntry)!) * 100 * (data.yourDirection === "short" ? -1 : 1)
       : null;
 
   return (
@@ -216,7 +245,7 @@ export function PositionChart({ coin, address, height = 360 }: Props) {
               You {formatPrice(data.yourEntry)}
             </span>
           )}
-          {data?.smAvgEntry !== undefined && <span className="fig text-[12px] text-ink-2">Smart Money avg {formatPrice(data.smAvgEntry)}</span>}
+          {(smAvgProp ?? data?.smAvgEntry) != null && <span className="fig text-[12px] text-ink-2">Smart Money avg {formatPrice((smAvgProp ?? data?.smAvgEntry)!)}</span>}
         </div>
         <div className="flex items-center gap-1 bg-bezel rounded-lg p-1">
           {TIMEFRAMES.map((t) => (
