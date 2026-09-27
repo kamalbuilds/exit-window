@@ -60,3 +60,6 @@ progress/raw/aa-data/
 /docs/signals.md
 /docs/BUILD-SPEC.md
 /data/sentinel-positions.json*
+
+# launch film workspace (raw captures include private chat screenshots)
+/launch-video/
