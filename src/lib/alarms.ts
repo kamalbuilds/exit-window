@@ -281,14 +281,20 @@ export function formatAlarmMessage(input: AlarmMessageInput): string {
   const { leaderLabel, leaderAddress, change, medianWindowMin, ownerSize, appUrl, exitDna, protectionLine } = input;
   const who = leaderLabel || shortAddr(leaderAddress);
   const pctClosed = Math.round(change.reducedFraction * 100);
-  const verb = change.kind === "close" ? "closed" : change.kind === "flip" ? "flipped" : "started exiting";
-  let msg =
-    `${who} ${verb} your ${change.coin} ${change.direction}: -${pctClosed}%. ` +
-    `Its exits have left holders a median ${fmtMin(medianWindowMin)} before a 1% move against them. ` +
-    `You hold ${ownerSize} ${change.coin}. Report: ${appUrl}/w/${leaderAddress}`;
-  if (exitDna) msg += ` ${exitDna}`;
-  if (protectionLine) msg += `\n${protectionLine}`;
-  return msg;
+  const verb = change.kind === "close" ? "closed" : change.kind === "flip" ? "flipped" : "is exiting";
+  const size = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  const lines = [
+    `${who} ${verb} ${change.coin} ${change.direction}`,
+    `Cut ${pctClosed}%: ${size(change.fromSize)} to ${size(change.toSize)} ${change.coin}.`,
+    medianWindowMin === null
+      ? "This wallet's exit timing is still being measured."
+      : `Its exits have left holders a median ${fmtMin(medianWindowMin)} before a 1% move against them.`,
+    ownerSize > 0 ? `You hold ${size(ownerSize)} ${change.coin}.` : `You don't hold ${change.coin} right now.`,
+  ];
+  if (exitDna) lines.push(exitDna);
+  if (protectionLine) lines.push(protectionLine);
+  lines.push(`Report: ${appUrl}/w/${leaderAddress}`);
+  return lines.join("\n");
 }
 
 /** Only sent once the owner has actually held the coin and then fully closed it - see

@@ -94,7 +94,8 @@ describe("formatAlarmMessage", () => {
       ownerSize: 3,
       appUrl: "https://exit-window.example",
     });
-    expect(msg).toContain("Leader One started exiting your ETH long: -50%");
+    expect(msg).toContain("Leader One is exiting ETH long");
+    expect(msg).toContain("Cut 50%");
     expect(msg).toContain("median 42 min");
     expect(msg).toContain("You hold 3 ETH");
     expect(msg).toContain("https://exit-window.example/w/0xleaderaddress000000000000000000000000");
@@ -110,7 +111,8 @@ describe("formatAlarmMessage", () => {
       appUrl: "https://x.example",
     });
     expect(msg).toContain("0x1234…cdef");
-    expect(msg).toContain("an unmeasured window");
+    expect(msg).toContain("exit timing is still being measured");
+    expect(msg).not.toContain("unmeasured");
   });
 });
 
@@ -749,5 +751,21 @@ describe("readExitDna with exit risk", () => {
     const withRisk = { ...base, exitRisk: { level: "high", fullExitPct: 100, minutesToFlat: 0.5, medianWindowMin: 163, sample: 3, sentence: "" } } as unknown as WalletReport;
     expect(readExitDna(withRisk)).toMatch(/^Holder risk HIGH\. /);
     expect(readExitDna(base)).not.toMatch(/^Holder risk/);
+  });
+});
+
+describe("formatAlarmMessage when the owner does not hold the coin", () => {
+  it("says so instead of 'You hold 0'", () => {
+    const msg = formatAlarmMessage({
+      leaderLabel: null,
+      leaderAddress: "0xb40da15b8cc492fff87d9b1e06bb45769d7e75d9",
+      change: { coin: "PONS", kind: "reduce", direction: "short", fromSize: 75000, toSize: 37500, reducedFraction: 0.5, at: 0 },
+      medianWindowMin: null,
+      ownerSize: 0,
+      appUrl: "https://x.example",
+    });
+    expect(msg).toContain("You don't hold PONS right now.");
+    expect(msg).not.toContain("You hold 0");
+    expect(msg).toContain("75,000 to 37,500 PONS");
   });
 });
