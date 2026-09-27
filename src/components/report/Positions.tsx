@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { OpenPosition } from "@/lib/types";
+import { TokenCell } from "../TokenIcon";
 import { formatUsd } from "../format";
 
 const SHOWN = 10;
@@ -17,48 +18,47 @@ function notional(p: OpenPosition): number {
 
 export function Positions({ positions }: { positions: OpenPosition[] }) {
   const [showAll, setShowAll] = useState(false);
-  if (positions.length === 0) return <p className="text-[15px] text-ink-2 border-t border-ink pt-4">Flat. This wallet holds no open perp positions right now.</p>;
+  if (positions.length === 0) return <p className="px-4 py-5 text-[14px] text-ink-2">Flat. This wallet holds no open perp positions right now.</p>;
   const sorted = [...positions].sort((a, b) => notional(b) - notional(a));
   const visible = showAll ? sorted : sorted.slice(0, SHOWN);
   return (
     <div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-left">
-          <thead>
-            <tr className="border-t border-b border-ink label">
-              <th className="py-2 font-medium">Coin</th>
-              <th className="py-2 font-medium">Side</th>
-              <th className="py-2 font-medium text-right">Size</th>
-              <th className="py-2 font-medium text-right">Entry</th>
-              <th className="py-2 font-medium text-right">Mark</th>
-              <th className="py-2 font-medium text-right">Unrealized</th>
-              <th className="py-2 font-medium text-right">Lev</th>
+      <table className="w-full text-left">
+        <thead>
+          <tr className="bg-bezel border-b border-rule">
+            <th className="h-9 pl-4 pr-2 label font-medium">Coin</th>
+            <th className="h-9 px-2 label font-medium">Side</th>
+            <th className="h-9 px-2 label font-medium text-right hidden sm:table-cell">Size</th>
+            <th className="h-9 px-2 label font-medium text-right hidden sm:table-cell">Entry</th>
+            <th className="h-9 px-2 label font-medium text-right hidden lg:table-cell">Mark</th>
+            <th className="h-9 px-2 label font-medium text-right">Unrealized</th>
+            <th className="h-9 pl-2 pr-4 label font-medium text-right hidden xl:table-cell">Lev</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((p) => (
+            <tr key={p.coin} className="h-11 border-b border-rule transition-[background-color] duration-150 hover:bg-bezel">
+              <td className="pl-4 pr-2">
+                <TokenCell coin={p.coin} />
+              </td>
+              <td className="px-2">
+                <span className={`chip ${p.direction === "long" ? "chip-lume" : "chip-late"}`}>{p.direction === "long" ? "Long" : "Short"}</span>
+              </td>
+              <td className="px-2 fig text-[13px] text-right text-ink-2 hidden sm:table-cell">{p.size.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+              <td className="px-2 fig text-[13px] text-right text-ink-2 hidden sm:table-cell">{px(p.entryPx)}</td>
+              <td className="px-2 fig text-[13px] text-right text-ink-2 hidden lg:table-cell">{px(p.markPx)}</td>
+              <td className={`px-2 fig text-[13px] text-right ${(p.unrealizedPnlUsd ?? 0) >= 0 ? "text-lume" : "text-late"}`}>{formatUsd(p.unrealizedPnlUsd, { sign: true })}</td>
+              <td className="pl-2 pr-4 fig text-[13px] text-right text-ink-3 hidden xl:table-cell">{p.leverage ? `${p.leverage}x` : "n/a"}</td>
             </tr>
-          </thead>
-          <tbody>
-            {visible.map((p) => (
-              <tr key={p.coin} className="border-b border-rule">
-                <td className="py-2.5 fig text-[14px]">{p.coin}</td>
-                <td className={`py-2.5 text-[13px] font-medium ${p.direction === "long" ? "text-lume" : "text-late"}`}>{p.direction}</td>
-                <td className="py-2.5 fig text-[13px] text-right text-ink-2">{p.size.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                <td className="py-2.5 fig text-[13px] text-right text-ink-2">{px(p.entryPx)}</td>
-                <td className="py-2.5 fig text-[13px] text-right text-ink-2">{px(p.markPx)}</td>
-                <td className={`py-2.5 fig text-[13px] text-right ${(p.unrealizedPnlUsd ?? 0) >= 0 ? "text-lume" : "text-late"}`}>
-                  {formatUsd(p.unrealizedPnlUsd, { sign: true })}
-                </td>
-                <td className="py-2.5 fig text-[13px] text-right text-ink-3">{p.leverage ? `${p.leverage}x` : "n/a"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
       {sorted.length > SHOWN && (
-        <button
-          onClick={() => setShowAll((s) => !s)}
-          className="mt-3 text-[13px] text-ink-2 underline decoration-rule hover:decoration-ink"
-        >
-          {showAll ? "Show top 10 by notional" : `Show all ${sorted.length}`}
-        </button>
+        <div className="px-4 py-3">
+          <button onClick={() => setShowAll((s) => !s)} className="btn-secondary h-8 px-3 text-[13px] font-medium text-ink whitespace-nowrap">
+            {showAll ? "Show top 10 by notional" : `Show all ${sorted.length}`}
+          </button>
+        </div>
       )}
     </div>
   );

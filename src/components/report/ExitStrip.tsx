@@ -1,20 +1,23 @@
 import type { ExitWindow } from "@/lib/types";
+import { TokenIcon } from "../TokenIcon";
 import { formatDate, formatMinutes } from "../format";
 import { DELAYS, MAJOR_TICKS, inTime, logPos } from "../timescale";
 
-/** Shared log axis labels drawn once above the exit log. */
+/** Shared log axis drawn once above the exit log. The inner layer is inset to sit over the strip track. */
 export function StripAxis() {
   return (
-    <div className="relative h-5 ml-0 md:ml-[13rem] md:mr-[7.5rem]" aria-hidden="true">
-      {MAJOR_TICKS.map((t) => (
-        <span
-          key={t.sec}
-          className="fig absolute top-0 -translate-x-1/2 text-[11px] text-ink-3"
-          style={{ left: `${logPos(t.sec) * 100}%` }}
-        >
-          {t.label}
-        </span>
-      ))}
+    <div className="h-6 bg-bezel border-b border-rule" aria-hidden="true">
+      <div className="relative h-full ml-0 md:ml-[17rem] md:mr-[8rem]">
+        {MAJOR_TICKS.map((t) => (
+          <span
+            key={t.sec}
+            className="fig absolute top-1/2 -translate-x-1/2 -translate-y-1/2 text-[11px] text-ink-3"
+            style={{ left: `${logPos(t.sec) * 100}%` }}
+          >
+            {t.label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -24,14 +27,21 @@ export function ExitStrip({ w, openedBefore }: { w: ExitWindow; openedBefore: bo
   const end = w.windowMin === null ? 1 : logPos(w.windowMin * 60);
   const lateCount = DELAYS.filter((d) => !inTime(d.sec, w.windowMin)).length;
   return (
-    <li className="grid md:grid-cols-[12rem_minmax(0,1fr)_6.5rem] items-center gap-x-4 gap-y-2 py-3 border-b border-rule">
-      <div className="min-w-0">
-        <p className="flex items-baseline gap-2">
-          <span className="fig text-[15px] text-ink">{w.coin}</span>
-          <span className={`text-[12px] font-medium ${w.direction === "long" ? "text-lume" : "text-late"}`}>{w.direction}</span>
-        </p>
-        <p className="fig text-[11px] text-ink-3">{formatDate(w.firstReduceAt)}</p>
-        {openedBefore && <p className="text-[11px] text-ink-3">opened before the lookback</p>}
+    <li className="grid md:grid-cols-[16rem_minmax(0,1fr)_7rem] items-center gap-x-4 gap-y-2 px-4 py-2.5 border-b border-rule transition-[background-color] duration-150 hover:bg-bezel">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <TokenIcon coin={w.coin} />
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 min-w-0">
+            <span className="fig text-[13px] text-ink truncate">{w.coin}</span>
+            <span className={`chip ${w.direction === "long" ? "chip-lume" : "chip-late"}`}>{w.direction === "long" ? "Long" : "Short"}</span>
+          </p>
+          <p className="fig text-[11px] text-ink-3 truncate">
+            {formatDate(w.firstReduceAt)}
+            {openedBefore ? (
+              <span title="This position was already open when the lookback started, so its entry is not fully observed."> · pre-lookback</span>
+            ) : null}
+          </p>
+        </div>
       </div>
 
       <div className="relative h-8" role="img" aria-label={`${w.coin} window ${w.windowMin === null ? "stayed open 24 hours" : formatMinutes(w.windowMin)}; ${lateCount} of 4 delays late`}>
@@ -57,7 +67,7 @@ export function ExitStrip({ w, openedBefore }: { w: ExitWindow; openedBefore: bo
       </div>
 
       <div className="md:text-right">
-        <p className={`fig text-[15px] ${w.windowMin === null ? "text-ink-2" : lateCount >= 2 ? "text-late" : "text-ink"}`}>
+        <p className={`fig text-[14px] ${w.windowMin === null ? "text-ink-2" : lateCount >= 2 ? "text-late" : "text-ink"}`}>
           {w.windowMin === null ? "held 24h+" : formatMinutes(w.windowMin)}
         </p>
         <p className="fig text-[11px] text-ink-3">worst {w.maxAdversePct.toFixed(1)}%</p>

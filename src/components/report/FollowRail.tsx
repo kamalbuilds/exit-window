@@ -107,36 +107,36 @@ export function FollowRail({ address, medianWindowMin }: { address: string; medi
   const nextPollIn = polledAt ? Math.max(0, Math.ceil((polledAt + POLL_MS - now) / 1000)) : null;
 
   return (
-    <aside className="bg-dial border border-ink" aria-label="Follow this wallet">
-      <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-ink bg-bezel">
-        <div>
-          <h2 className="display text-[22px]">Watch live</h2>
-          <p className="text-[13px] text-ink-3">
+    <aside className="panel" aria-label="Follow this wallet">
+      <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-rule">
+        <div className="min-w-0">
+          <h2 className="display text-[16px]">Watch live</h2>
+          <p className="text-[12px] text-ink-3 mt-0.5">
             {live ? "Live: reduces are mirrored on your Hyperliquid account, capped." : "Paper: reduces are mirrored and recorded, nothing is sent."}
           </p>
         </div>
         <button
           onClick={() => setFollowing((f) => !f)}
           aria-pressed={following}
-          className={`h-10 px-4 rounded-[var(--radius-control)] text-[14px] font-medium whitespace-nowrap transition-[background-color,color] duration-150 ${
-            following ? "bg-late text-dial hover:bg-ink" : "bg-ink text-paper hover:bg-ink-2"
-          }`}
+          className={`h-9 px-3 text-[13px] whitespace-nowrap shrink-0 ${following ? "btn-secondary text-ink font-medium" : "btn-primary"}`}
         >
           {following ? "Stop" : "Start following"}
         </button>
       </div>
 
-      <div className="px-5 py-5 flex flex-col gap-5">
+      <div className="px-4 py-4 flex flex-col gap-4">
         {trigger ? (
           <Chronograph size={320} startedAt={trigger.at} windowMin={medianWindowMin} title={`${trigger.coin} reduced; time since against the median window`}>
             <span className="label">{trigger.coin} reduced</span>
-            <span className={`fig text-[34px] leading-none mt-1 ${left !== null && left <= 0 ? "text-late" : "text-ink"}`}>
+            <span className={`fig display text-[24px] leading-none mt-1 block ${left !== null && left <= 0 ? "text-late" : "text-ink"}`}>
               {left === null ? formatClock((now - trigger.at) / 1000) : left > 0 ? formatClock(left) : "closed"}
             </span>
-            <span className="text-[12px] text-ink-2 mt-2">{left === null ? "no median window yet" : left > 0 ? "left in the median window" : "the median window has closed"}</span>
+            <span className="text-[12px] text-ink-2 mt-1.5 block">
+              {left === null ? "no median window yet" : left > 0 ? "left in the median window" : "the median window has closed"}
+            </span>
           </Chronograph>
         ) : (
-          <p className="text-[15px] text-ink-2">
+          <p className="text-[14px] text-ink-2">
             {!following
               ? `Watches this wallet's positions every 20 seconds. The moment it reduces, the clock starts${medianWindowMin !== null ? ` against its ${formatMinutes(medianWindowMin)} median window` : ""} and the reduce is mirrored.`
               : pollError
@@ -147,32 +147,33 @@ export function FollowRail({ address, medianWindowMin }: { address: string; medi
           </p>
         )}
 
-        {following && nextPollIn !== null && (
-          <p className="fig text-[12px] text-ink-3">next poll in {nextPollIn}s</p>
-        )}
+        {following && nextPollIn !== null && <p className="fig text-[12px] text-ink-3">next poll in {nextPollIn}s</p>}
 
-        <p className="text-[13px] text-ink-2 border-t border-rule pt-4">
+        <p className="text-[12px] text-ink-2 border-t border-rule pt-3">
           Holding the same coin as this wallet? Paste your address on the home page to get its exits on Telegram, even with this tab closed.
         </p>
 
         <div>
-          <h3 className="label mb-2">Mirror ledger</h3>
+          <h3 className="label mb-1.5">Mirror ledger</h3>
           {ledger.length === 0 ? (
-            <p className="text-[13px] text-ink-3">Empty until the wallet reduces.</p>
+            <p className="text-[12px] text-ink-3 py-2">Empty until the wallet reduces.</p>
           ) : (
-            <ol className="border-t border-ink">
+            <ol className="border-t border-rule">
               {ledger.map((e) => (
-                <li key={e.id} className="flex items-baseline justify-between gap-3 py-2 border-b border-rule text-[13px]">
-                  <span className="fig">
-                    {e.change.kind} {e.change.coin} {(e.change.reducedFraction * 100).toFixed(0)}%
-                  </span>
-                  <span className={e.status === "error" ? "text-late" : "text-ink-2"}>
-                    {e.status === "sending"
-                      ? "sending"
-                      : e.status === "error"
-                        ? e.error
-                        : `${e.result?.mode ?? "paper"} ${e.result?.usdValue ? formatUsd(e.result.usdValue) : ""}${e.result?.capped ? " (capped)" : ""}`}
-                  </span>
+                <li key={e.id} className="py-2 border-b border-rule">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="fig text-[12px] text-ink min-w-0 truncate">
+                      {e.change.kind} {e.change.coin} {(e.change.reducedFraction * 100).toFixed(0)}%
+                    </span>
+                    <span className={`chip ${e.status === "error" ? "chip-late" : e.status === "done" ? "chip-lume" : "chip-mute"}`}>{e.status}</span>
+                  </div>
+                  <p className="text-[12px] text-ink-3 mt-0.5 break-words">
+                    {e.status === "error"
+                      ? e.error
+                      : e.status === "sending"
+                        ? "Posting to the mirror route."
+                        : `${e.result?.mode ?? "paper"}${e.result?.usdValue ? ` ${formatUsd(e.result.usdValue)}` : ""}${e.result?.capped ? " (capped)" : ""}`}
+                  </p>
                 </li>
               ))}
             </ol>
