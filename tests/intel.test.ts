@@ -12,8 +12,7 @@ import {
   pickSpotToken,
   summarizeSmartMoneyTrades,
   type Reducer,
-  type TokenCandidate,
-} from "../src/lib/intel";
+  type TokenCandidate, pickRecyclableAlert } from "../src/lib/intel";
 import type { SmartMoneyPerpTrade } from "../src/lib/nansen";
 
 describe("parseLabelsResponse", () => {
@@ -270,5 +269,24 @@ describe("buildPressureRead", () => {
 
   it("names the count and denominator", () => {
     expect(buildPressureRead("HYPE", "long", 3, 12)).toBe("3 of 12 Smart Money HYPE longs reduced in the last hour.");
+  });
+});
+
+describe("pickRecyclableAlert", () => {
+  const mk = (id: string, name: string, createdAt: string, code: string | null) => ({
+    id,
+    name,
+    createdAt,
+    webhookUrl: code ? `https://exit-window.fly.dev/api/nansen-webhook?alarm=${code}` : null,
+  });
+  it("picks the oldest Exit Window alert and never a user's own alert or the one in use", () => {
+    const alerts = [
+      mk("user", "My BTC alert", "2026-09-01T00:00:00Z", null),
+      mk("new", "Exit Window: SM outflow on HYPE", "2026-09-27T12:00:00Z", "NEWCODE"),
+      mk("old", "Exit Window: SM outflow on STRK", "2026-09-27T10:00:00Z", "OLDCODE"),
+      mk("keep", "Exit Window: SM outflow on ETH", "2026-09-27T09:00:00Z", "KEEPME"),
+    ];
+    expect(pickRecyclableAlert(alerts, "KEEPME")?.id).toBe("old");
+    expect(pickRecyclableAlert([alerts[0]], "X")).toBeNull();
   });
 });

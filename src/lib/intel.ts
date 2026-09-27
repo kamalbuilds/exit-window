@@ -404,11 +404,55 @@ export async function createSmartAlert(params: {
     throw new Error(`could not resolve a real on-chain spot token address for "${params.coin}"`);
   }
   const request = buildSmartAlertRequest({ ...params, tokenAddress: resolved.address, tokenChain: resolved.chain });
-  const res = await nansenCall("smart-alert", request, (j) => {
-    const r = j as { id?: string; alert_id?: string; data?: { id?: string } };
-    return String(r.id ?? r.alert_id ?? r.data?.id ?? "");
-  });
-  return { id: res.data, request };
+  const create = () =>
+    nansenCall("smart-alert", request, (j) => {
+      const r = j as { id?: string; alert_id?: string; data?: { id?: string } };
+      return String(r.id ?? r.alert_id ?? r.data?.id ?? "");
+    });
+  try {
+    return { id: (await create()).data, request };
+  } catch (err) {
+    // The Nansen plan caps how many Smart Alerts an account holds. Recycle the oldest alert this
+    // product created (named "Exit Window: ...") and try once more; alerts the user made in the
+    // Nansen app are never touched.
+    if (!/plan limit/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    const victim = pickRecyclableAlert(await listSmartAlerts(), params.code);
+    if (!victim) throw err;
+    await deleteSmartAlert(victim.id);
+    return { id: (await create()).data, request };
+  }
+}
+
+export interface ListedSmartAlert {
+  id: string;
+  name: string;
+  createdAt: string;
+  webhookUrl: string | null;
+}
+
+/** GET /api/v1/smart-alert/list: every alert on the account. */
+export async function listSmartAlerts(): Promise<ListedSmartAlert[]> {
+  type Opts = Parameters<typeof nansenCall>[3];
+  const res = await nansenCall(
+    "smart-alert/list",
+    null,
+    (j) =>
+      (Array.isArray(j) ? j : []).map((a: Record<string, unknown>) => {
+        const ch = (a.channels as { type?: string; data?: { webhookUrl?: string } }[] | undefined)?.find((c) => c.type === "webhook");
+        return { id: String(a.id), name: String(a.name ?? ""), createdAt: String(a.createdAt ?? ""), webhookUrl: ch?.data?.webhookUrl ?? null };
+      }),
+    { method: "GET" } as unknown as Opts,
+  );
+  return res.data;
+}
+
+/** Oldest alert this product created, excluding the one already serving `keepCode`. Pure, tested. */
+export function pickRecyclableAlert(alerts: ListedSmartAlert[], keepCode: string): ListedSmartAlert | null {
+  const ours = alerts
+    .filter((a) => a.name.startsWith("Exit Window:"))
+    .filter((a) => !(a.webhookUrl ?? "").includes(`alarm=${keepCode}`))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return ours[0] ?? null;
 }
 
 /** DELETE /api/v1/smart-alert/{alert_id}: no body, path-scoped. nansen.ts's RequestOptions only
