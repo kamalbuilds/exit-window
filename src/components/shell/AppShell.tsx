@@ -78,11 +78,7 @@ function Sidebar() {
         </a>
         <p className="px-3 pt-2 text-[12px] text-ink-3">
           Data: Nansen API
-          {data ? (
-            <span className="fig block">
-              {data.totalNetwork} live · {data.totalCacheHits} cached
-            </span>
-          ) : null}
+
         </p>
       </div>
     </aside>

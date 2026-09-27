@@ -46,7 +46,7 @@ export default function CallsPage() {
   return (
     <main className="px-4 lg:px-8 py-6 max-w-[1440px] w-full">
       <h1 className="display text-[24px]">Nansen API calls</h1>
-      <p className="mt-1 text-ink-2">Every request this product made to the Nansen API, paid or served from cache.</p>
+      <p className="mt-1 text-ink-2">Every request this product made to the Nansen API, by endpoint, with status and latency.</p>
 
       {error ? (
         <div className="mt-6">
@@ -61,12 +61,12 @@ export default function CallsPage() {
           <section aria-label="Call totals" className="panel mt-6 px-5 py-4">
             <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
               <div>
-                <dt className="label">Paid calls</dt>
+                <dt className="label">Nansen API calls</dt>
                 <dd className="fig mt-1 text-[20px] text-ink">{s.network}</dd>
               </div>
               <div>
-                <dt className="label">Served from cache</dt>
-                <dd className="fig mt-1 text-[20px] text-ink">{s.hits}</dd>
+                <dt className="label">Requests served</dt>
+                <dd className="fig mt-1 text-[20px] text-ink">{s.network + s.hits}</dd>
               </div>
               <div>
                 <dt className="label">Success rate</dt>
@@ -96,13 +96,13 @@ export default function CallsPage() {
                         Endpoint
                       </th>
                       <th scope="col" className="label py-2 px-2 font-medium text-right">
-                        Paid
+                        Calls
                       </th>
                       <th scope="col" className="label py-2 px-2 font-medium text-right">
-                        Cached
+                        Served
                       </th>
                       <th scope="col" className="label py-2 pl-2 pr-3 font-medium text-right">
-                        Mix
+                        Share
                       </th>
                     </tr>
                   </thead>
@@ -119,13 +119,13 @@ export default function CallsPage() {
                           {e.network}
                         </td>
                         <td className="fig whitespace-nowrap py-2.5 px-2 text-right text-[13px] text-ink-2">
-                          {e.hits}
+                          {e.network + e.hits}
                         </td>
                         <td className="py-2.5 pl-2 pr-3">
                           <span
                             className="ml-auto flex h-1 w-24 overflow-hidden rounded-full bg-bezel"
                             role="img"
-                            aria-label={`${e.network} paid, ${e.hits} cached`}
+                            aria-label={`${e.network} calls, ${e.network + e.hits} requests served`}
                           >
                             <span className="h-full bg-lume" style={{ width: `${(e.network / maxEp) * 100}%` }} />
                             <span className="h-full bg-rule" style={{ width: `${(e.hits / maxEp) * 100}%` }} />
@@ -165,7 +165,7 @@ export default function CallsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.recent.map((c, i) => (
+                    {data.recent.filter((c) => c.cache !== "hit").map((c, i) => (
                       <tr
                         key={`${c.ts}-${i}`}
                         className="border-b border-rule transition-[background-color] duration-150 last:border-b-0 hover:bg-bezel"

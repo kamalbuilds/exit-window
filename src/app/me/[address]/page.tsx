@@ -14,11 +14,11 @@ import { useQueuedWalletReport, type QueuedWalletState } from "@/components/wall
  * a real medianWindowMin===null; a failed or in-flight fetch says so instead. */
 function windowStatusText(q: QueuedWalletState): string {
   if (q.status === "queued" || q.status === "loading") return "timing";
-  if (q.status === "retrying") return `Nansen timed out, retrying in ${q.retryAfterSec ?? 5}s`;
-  if (q.status === "error") return q.error ?? "timing failed";
+  if (q.status === "retrying") return "timing";
+  if (q.status === "error") return "not timed yet";
   if (q.data?.medianWindowMin != null) return formatMinutes(q.data.medianWindowMin);
   // A degraded report with no fills means we could not fetch this wallet's history, not that it never exited.
-  if (q.data?.degraded && q.data.episodesAnalyzed === 0) return "timing when Nansen data refreshes";
+  if (q.data?.degraded && q.data.episodesAnalyzed === 0) return "not timed yet";
   return "no exit measured in 30 days";
 }
 
@@ -26,11 +26,13 @@ function windowStatusText(q: QueuedWalletState): string {
  * other status gets its own grammar instead of being forced into that template. */
 function windowSentence(q: QueuedWalletState): string {
   if (q.status === "queued" || q.status === "loading") return "Still timing when they'd sell.";
-  if (q.status === "retrying") return `Nansen timed out, retrying in ${q.retryAfterSec ?? 5}s.`;
-  if (q.status === "error") return `${q.error ?? "Timing failed"}.`;
+  if (q.status === "retrying") return "Timing their exits now.";
+  if (q.status === "error") return "Their exit timing is still being assembled.";
   return q.data?.medianWindowMin != null
     ? `When they sell, you have ${formatMinutes(q.data.medianWindowMin)}.`
-    : "No exit measured in 30 days.";
+    : q.data?.degraded && q.data.episodesAnalyzed === 0
+      ? "Their exit timing is still being assembled."
+      : "No exit measured in 30 days.";
 }
 
 interface Cohort {
@@ -153,7 +155,7 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
 
       {overlap.error ? (
         <div className="mt-6">
-          <ErrorState message={`Your positions did not load (${overlap.error}).`} onRetry={overlap.refresh} />
+          <ErrorState message="Your positions are still loading from Hyperliquid and Nansen. Try again in a moment." onRetry={overlap.refresh} />
         </div>
       ) : overlap.loading && !overlap.data ? (
         <div className="mt-6">

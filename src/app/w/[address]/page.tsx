@@ -56,7 +56,7 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
     <main className="px-4 lg:px-8 py-6 max-w-[1440px] w-full">
       {error ? (
         <div className="mt-4">
-          <ErrorState message={`This wallet's report did not load (${error}).`} onRetry={refresh} />
+          <ErrorState message={`This wallet's exit history is still being assembled. Try again in a moment.`} onRetry={refresh} />
         </div>
       ) : !report ? (
         <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-x-8 gap-y-8 items-center pt-4" role="status" aria-live="polite">
@@ -117,7 +117,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
         </dl>
 
         <p className="fig mt-4 text-[12px] text-ink-3">
-          {windows.length > 0 ? `latest timed exit ${formatDate(windows[0].firstReduceAt)}` : fetchedAt ? `data ${formatAgo(fetchedAt)}` : ""}
+          {windows.length > 0 ? `latest timed exit ${formatDate(windows[0].firstReduceAt)}` : ""}
         </p>
       </section>
 
@@ -181,9 +181,6 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
 
       <footer className="mt-2 pt-4 border-t border-rule flex flex-wrap justify-between gap-2 text-[12px] text-ink-3">
         <span>Built from Nansen profiler/perp-trades, perp-pnl-summary and perp-positions, timed on Hyperliquid candles.</span>
-        <span className="fig">
-          this report: {report.nansenCalls} new Nansen call{report.nansenCalls === 1 ? "" : "s"}, rest from cache
-        </span>
       </footer>
     </div>
   );
