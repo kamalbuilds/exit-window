@@ -75,7 +75,7 @@ export async function mirrorChange(change: PositionChange, followerAddress: stri
     // Hyperliquid's own clearinghouseState, not Nansen's perp/positions: free, live, no credits,
     // and (via hyperliquid.ts's dex fan-out) already sees a HIP-3 position that a main-dex-only
     // call would miss entirely.
-    const positions = await fetchClearinghouseState(followerAddress);
+    const positions = await fetchClearinghouseState(followerAddress, 0); // fresh: this sizes a real cut
     followerPosition = positions.find((p) => p.coin === change.coin) ?? null;
     followerSizeBefore = followerPosition?.size ?? 0;
   } else {

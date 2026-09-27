@@ -8,6 +8,7 @@ if [ ! -f /data/.seeded ]; then
 fi
 # New seed responses shipped in later images are merged without overwriting runtime files.
 cp -Rn /app/data-image/nansen-seed/. /data/app-data/nansen-seed/ 2>/dev/null || true
-./node_modules/.bin/tsx scripts/alarm-worker.ts &
-./node_modules/.bin/tsx scripts/sentinel.ts &
-exec ./node_modules/.bin/next start -p "${PORT:-3000}"
+# Hyperliquid allows 1200 weight/min per IP; each process gets its own share (src/lib/hyperliquid.ts).
+HL_WEIGHT_PER_MIN=150 ./node_modules/.bin/tsx scripts/alarm-worker.ts &
+HL_WEIGHT_PER_MIN=600 ./node_modules/.bin/tsx scripts/sentinel.ts &
+HL_WEIGHT_PER_MIN=400 exec ./node_modules/.bin/next start -p "${PORT:-3000}"

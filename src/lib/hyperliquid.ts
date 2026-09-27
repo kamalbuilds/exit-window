@@ -1,6 +1,44 @@
-// Hyperliquid public info API. No key required, no credits, no rate-limit budget to protect -
-// so this client is plain fetch with no cache layer of its own.
+// Hyperliquid public info API. No key and no credits, but a hard rate limit: 1200 weight per
+// minute per IP, shared by every process on the host (web, alarm worker, sentinel). One cold /me
+// load fans out a report per holder and used to blow it, so every call goes through hlPost.
 import type { Direction, Fill, OpenPosition } from "./types";
+
+// This process's share of the IP budget; deploy/start.sh splits 1200 across the three processes.
+const WEIGHT_PER_MIN = Number(process.env.HL_WEIGHT_PER_MIN) || 400;
+const BURST = WEIGHT_PER_MIN / 4;
+let tokens = BURST;
+let refilledAt = Date.now();
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function takeWeight(weight: number): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    tokens = Math.min(BURST, tokens + ((now - refilledAt) / 60_000) * WEIGHT_PER_MIN);
+    refilledAt = now;
+    if (tokens >= weight) {
+      tokens -= weight;
+      return;
+    }
+    await sleep(((weight - tokens) / WEIGHT_PER_MIN) * 60_000);
+  }
+}
+
+/** Every /info call. Weights from Hyperliquid's rate-limit docs: 2 for clearinghouseState and
+ * allMids, 20 for candleSnapshot and userFillsByTime. ponytail: those two also cost extra per
+ * page of items returned; charged at base, the 429 retry below absorbs the difference. */
+export async function hlPost(body: Record<string, unknown>, weight: number): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    await takeWeight(weight);
+    const res = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 429 || attempt === 3) return res;
+    await sleep(1000 * 2 ** attempt + Math.random() * 500);
+  }
+}
 
 export type CandleInterval = "1m" | "5m" | "15m" | "1h";
 
@@ -33,11 +71,7 @@ export async function fetchCandles(
   startTime: number,
   endTime: number,
 ): Promise<Candle[] | null> {
-  const res = await fetch("https://api.hyperliquid.xyz/info", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "candleSnapshot", req: { coin, interval, startTime, endTime } }),
-  });
+  const res = await hlPost({ type: "candleSnapshot", req: { coin, interval, startTime, endTime } }, 20);
   if (!res.ok) return null;
   const raw = (await res.json()) as unknown;
   if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -72,11 +106,17 @@ export function dexPrefix(coin: string): string {
 export async function fetchMidsForDex(dex: string): Promise<Record<string, number>> {
   const cached = midsCache.get(dex);
   if (cached && Date.now() - cached.fetchedAt < MIDS_TTL_MS) return cached.data;
-  const res = await fetch("https://api.hyperliquid.xyz/info", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dex ? { type: "allMids", dex } : { type: "allMids" }),
-  });
+  const pending = midsInflight.get(dex);
+  if (pending) return pending;
+  const p = readMids(dex).finally(() => midsInflight.delete(dex));
+  midsInflight.set(dex, p);
+  return p;
+}
+
+const midsInflight = new Map<string, Promise<Record<string, number>>>();
+
+async function readMids(dex: string): Promise<Record<string, number>> {
+  const res = await hlPost(dex ? { type: "allMids", dex } : { type: "allMids" }, 2);
   if (!res.ok) throw new Error(`Hyperliquid allMids ${res.status}`);
   const raw = (await res.json()) as Record<string, string | number>;
   const out: Record<string, number> = {};
@@ -120,12 +160,24 @@ interface RawClearinghousePosition {
 // if a position on another HIP-3 dex needs covering.
 const CLEARINGHOUSE_DEXES = ["", "xyz", "io"];
 
-export async function fetchClearinghouseForDex(address: string, dex: string): Promise<OpenPosition[]> {
-  const res = await fetch("https://api.hyperliquid.xyz/info", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dex ? { type: "clearinghouseState", user: address, dex } : { type: "clearinghouseState", user: address }),
-  });
+// The same wallet is read by overlap, its report and the chart within seconds of one page load;
+// one read serves them all. A failed read is never cached.
+const CLEARINGHOUSE_TTL_MS = 10_000;
+const clearinghouseCache = new Map<string, { at: number; p: Promise<OpenPosition[]> }>();
+
+/** maxAgeMs: 0 forces a fresh read (the protection rule sizes a real cut from it). */
+export async function fetchClearinghouseForDex(address: string, dex: string, maxAgeMs = CLEARINGHOUSE_TTL_MS): Promise<OpenPosition[]> {
+  const key = `${address.toLowerCase()}|${dex}`;
+  const hit = clearinghouseCache.get(key);
+  if (hit && maxAgeMs > 0 && Date.now() - hit.at < maxAgeMs) return hit.p;
+  const p = readClearinghouseForDex(address, dex);
+  clearinghouseCache.set(key, { at: Date.now(), p });
+  p.catch(() => clearinghouseCache.delete(key));
+  return p;
+}
+
+async function readClearinghouseForDex(address: string, dex: string): Promise<OpenPosition[]> {
+  const res = await hlPost(dex ? { type: "clearinghouseState", user: address, dex } : { type: "clearinghouseState", user: address }, 2);
   if (!res.ok) throw new Error(`Hyperliquid clearinghouseState ${res.status}`);
   const raw = (await res.json()) as { assetPositions?: { position: RawClearinghousePosition }[] };
   return (raw.assetPositions ?? []).map(({ position: p }) => {
@@ -157,8 +209,8 @@ export async function fetchPositionOnCoin(address: string, coin: string): Promis
  * fills it from the same allMids cache used everywhere else. Fans out across the main dex plus
  * every known HIP-3 dex so a builder-deployed position (xyz:CL, io:NBIS, ...) isn't silently
  * dropped just because it lives outside the main perp market. */
-export async function fetchClearinghouseState(address: string): Promise<OpenPosition[]> {
-  const perDex = await Promise.all(CLEARINGHOUSE_DEXES.map((dex) => fetchClearinghouseForDex(address, dex)));
+export async function fetchClearinghouseState(address: string, maxAgeMs = CLEARINGHOUSE_TTL_MS): Promise<OpenPosition[]> {
+  const perDex = await Promise.all(CLEARINGHOUSE_DEXES.map((dex) => fetchClearinghouseForDex(address, dex, maxAgeMs)));
   return perDex.flat();
 }
 
@@ -172,11 +224,7 @@ export async function fetchUserFills(address: string, fromMs: number, toMs: numb
   const out: Fill[] = [];
   let start = fromMs;
   for (;;) {
-    const res = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "userFillsByTime", user: address, startTime: start, endTime: toMs }),
-    });
+    const res = await hlPost({ type: "userFillsByTime", user: address, startTime: start, endTime: toMs }, 20);
     if (!res.ok) throw new Error(`Hyperliquid userFillsByTime ${res.status}`);
     const rows = (await res.json()) as {
       coin: string; px: string; sz: string; side: "B" | "A"; time: number; startPosition: string;
