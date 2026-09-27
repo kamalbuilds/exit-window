@@ -274,6 +274,78 @@ export class NansenTimeoutError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Per-key failure backoff + global circuit breaker. Root cause of the credit-burn bug this
+// guards against: once a cached key's TTL expired and a refresh failed, every later request for
+// that same key hit the network again - a chart polling every 15s, or an overlap fan-out across
+// many (coin, side, labelType) keys, turned one failure into hundreds of retries per minute.
+// The existing NansenCreditsError latch only trips on a 403 whose body is exactly
+// {code: "insufficient_credits"}; a 403/timeout/5xx that doesn't match that shape (confirmed in
+// data/nansen-calls.jsonl: 140 "Nansen auth failed (403)" entries) skipped the latch entirely
+// and kept hammering the network. Backoff/breaker below close that gap for every failure kind,
+// not just the one Nansen happens to label insufficient_credits.
+// ---------------------------------------------------------------------------
+
+const KEY_BACKOFF_STALE_MS = 10 * 60_000; // point 1: stale served -> don't touch this key for 10min
+const KEY_BACKOFF_MIN_MS = 60_000; // point 1: no stale -> 60s, doubling
+const KEY_BACKOFF_MAX_MS = 10 * 60_000; // point 1: capped at 10min
+
+interface KeyBackoff {
+  nextAttemptAt: number;
+  backoffMs: number;
+}
+const keyBackoff = new Map<string, KeyBackoff>();
+
+const BREAKER_FAILURE_THRESHOLD = 5; // point 2
+const BREAKER_OPEN_MS = 3 * 60_000; // point 2
+let consecutiveNetworkFailures = 0;
+let breakerOpenUntil = 0;
+
+/** True while the breaker is open. Lazily logs the single "closed" line the first time this is
+ * called after the open window has elapsed - no per-request logging, no timer required. */
+function isBreakerOpen(): boolean {
+  if (Date.now() < breakerOpenUntil) return true;
+  if (breakerOpenUntil !== 0) {
+    console.log("[nansen] circuit breaker closed, resuming network calls");
+    breakerOpenUntil = 0;
+  }
+  return false;
+}
+
+/** Called once per real network attempt that failed (never for a credits-latch short-circuit,
+ * which never touched the network and already has its own 5min global latch above). */
+function recordNetworkFailure(key: string, hadStale: boolean): void {
+  consecutiveNetworkFailures++;
+  if (consecutiveNetworkFailures >= BREAKER_FAILURE_THRESHOLD && breakerOpenUntil <= Date.now()) {
+    breakerOpenUntil = Date.now() + BREAKER_OPEN_MS;
+    console.log(
+      `[nansen] circuit breaker OPEN for ${BREAKER_OPEN_MS / 60_000}min after ${consecutiveNetworkFailures} consecutive network failures`,
+    );
+  }
+  const prev = keyBackoff.get(key);
+  const backoffMs = hadStale
+    ? KEY_BACKOFF_STALE_MS
+    : Math.min(prev ? prev.backoffMs * 2 : KEY_BACKOFF_MIN_MS, KEY_BACKOFF_MAX_MS);
+  keyBackoff.set(key, { nextAttemptAt: Date.now() + backoffMs, backoffMs });
+}
+
+/** Called once per real network attempt that succeeded: clears this key's backoff and resets
+ * the breaker's consecutive-failure count (a healthy call on any endpoint proves the network is
+ * up, which is exactly what should let previously-backed-off keys get a fresh attempt sooner -
+ * point 2 only opens on CONSECUTIVE failures). */
+function recordNetworkSuccess(key: string): void {
+  consecutiveNetworkFailures = 0;
+  keyBackoff.delete(key);
+}
+
+/** Test-only: clears breaker/backoff state so one test file's failures never leak into another
+ * test's assertions about a fresh key or a fresh breaker. */
+export function __resetBackoffStateForTests(): void {
+  keyBackoff.clear();
+  consecutiveNetworkFailures = 0;
+  breakerOpenUntil = 0;
+}
+
 interface RequestOptions {
   method?: "GET" | "POST";
   query?: Record<string, string>;
@@ -444,6 +516,36 @@ export async function nansenCall<T>(
     }
   }
 
+  // Points 1+2+4: before attempting the network, honor this key's own backoff and the global
+  // breaker. Neither writes a call-log line (point 4: a blocked attempt is not a real attempt) -
+  // serve stale if this key has any, otherwise fail fast with the same typed error a real
+  // timeout would raise, so every existing caller (route handlers matching on NansenTimeoutError)
+  // keeps working unchanged.
+  const now = Date.now();
+  const backoff = keyBackoff.get(key);
+  const breakerOpen = isBreakerOpen();
+  const keyBackedOff = !!backoff && now < backoff.nextAttemptAt;
+  if (breakerOpen || keyBackedOff) {
+    const stale =
+      ttl !== null
+        ? (memCache.get(key) ??
+          (await readJson(path.join(cacheDir(), `${hash}.json`))) ??
+          (await readJson(path.join(SEED_DIR, `${hash}.json`))))
+        : undefined;
+    if (stale) {
+      const rec: CacheRecord<T> = { data: stale.data as T, fetchedAt: stale.fetchedAt, stale: true };
+      memCache.set(key, rec);
+      return { data: rec.data, fetchedAt: rec.fetchedAt, stale: true };
+    }
+    const nextAttemptAt = breakerOpen ? breakerOpenUntil : (backoff as KeyBackoff).nextAttemptAt;
+    const retryAfterSec = Math.max(1, Math.ceil((nextAttemptAt - now) / 1000));
+    throw new NansenTimeoutError(
+      endpoint,
+      breakerOpen ? "circuit breaker open, no stale cache available" : "per-key backoff active, no stale cache available",
+      retryAfterSec,
+    );
+  }
+
   let promise = inflight.get(key);
   if (!promise) {
     promise = (async (): Promise<CacheRecord<T>> => {
@@ -451,6 +553,7 @@ export async function nansenCall<T>(
       try {
         const raw = await rawFetch(endpoint, body, opts);
         bump(ledger.network, endpoint);
+        recordNetworkSuccess(key);
         void logCall({
           endpoint,
           cache: "miss",
@@ -483,6 +586,12 @@ export async function nansenCall<T>(
           memCache.get(key) ??
           (await readJson(path.join(cacheDir(), `${hash}.json`))) ??
           (await readJson(path.join(SEED_DIR, `${hash}.json`)));
+        // Point 1: a credits-latch short-circuit never touched the network (its own 5min global
+        // latch already prevents the next call from doing so either) - only a real failed network
+        // attempt counts toward this key's backoff or the breaker's consecutive-failure count.
+        if (!(err instanceof NansenCreditsError)) {
+          recordNetworkFailure(key, !!stale);
+        }
         if (stale) {
           const rec: CacheRecord<T> = { data: stale.data as T, fetchedAt: stale.fetchedAt, stale: true };
           memCache.set(key, rec);
