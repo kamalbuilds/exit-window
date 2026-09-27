@@ -115,13 +115,15 @@ function classifyExitStyle(episodes: Episode[]): WalletReport["exitStyle"] {
   return "mixed";
 }
 
-/** Distills how this wallet tends to leave a position from its own closed, observed-open episodes.
- * Null when there's nothing to say (no eligible episode). Order matters: nuclear is checked before
- * scaler so a wallet with exactly one clip that always fully exits reads as nuclear, not scaler. */
+/** Distills how this wallet tends to leave a position from its own closed episodes. Structural
+ * metrics (clips, full-exit rate, time to flat) only need the exit side, so an unobserved-open
+ * episode (entry predates the lookback) still counts for those; firstReduceAtPnlPct needs a real
+ * entry price, so it's median'd over the observedOpen subset only and is null when that's empty.
+ * Null overall when there's no closed episode with an exit at all. Order matters in the style
+ * classifier: nuclear is checked before scaler so a wallet with exactly one clip that always fully
+ * exits reads as nuclear, not scaler. */
 export function computeExitDna(episodes: Episode[]): ExitDna | null {
-  const eligible = episodes.filter(
-    (ep) => ep.observedOpen && ep.closedAt !== null && ep.exits.length > 0 && ep.walletReturnPct !== null,
-  );
+  const eligible = episodes.filter((ep) => ep.closedAt !== null && ep.exits.length > 0);
   if (eligible.length === 0) return null;
 
   const sample = eligible.length;
@@ -130,8 +132,10 @@ export function computeExitDna(episodes: Episode[]): ExitDna | null {
   );
   const fullExitAfterFirstReducePct = (eligible.filter((ep) => ep.exits.length === 1).length / sample) * 100;
   const medianClips = median(eligible.map((ep) => ep.exits.length)) as number;
+
+  const withEntry = eligible.filter((ep) => ep.observedOpen && ep.avgEntryPx > 0);
   const firstReduceAtPnlPct = median(
-    eligible.map((ep) => {
+    withEntry.map((ep) => {
       const move = (ep.exits[0].px - ep.avgEntryPx) / ep.avgEntryPx;
       return (ep.direction === "long" ? move : -move) * 100;
     }),

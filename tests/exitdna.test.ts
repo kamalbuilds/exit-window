@@ -32,10 +32,20 @@ function episode(opts: { entryPx: number; clips: number; exitStartPx: number; ex
 }
 
 describe("computeExitDna", () => {
-  it("returns null with no eligible (observed, closed, exited) episodes", () => {
-    const unobserved: Episode = { ...episode({ entryPx: 100, clips: 1, exitStartPx: 110, exitStepPx: 0 }), observedOpen: false };
-    expect(computeExitDna([unobserved])).toBeNull();
+  it("returns null with no closed, exited episodes", () => {
+    const stillOpen: Episode = { ...episode({ entryPx: 100, clips: 1, exitStartPx: 110, exitStepPx: 0 }), closedAt: null, exits: [] };
+    expect(computeExitDna([stillOpen])).toBeNull();
     expect(computeExitDna([])).toBeNull();
+  });
+
+  it("counts an unobserved-open episode's exits for clips/full-exit/time-to-flat, but excludes it from firstReduceAtPnlPct (no real entry price)", () => {
+    const unobserved: Episode = { ...episode({ entryPx: 100, clips: 1, exitStartPx: 110, exitStepPx: 0 }), observedOpen: false, avgEntryPx: 0 };
+    const dna = computeExitDna([unobserved]);
+    expect(dna).not.toBeNull();
+    expect(dna?.sample).toBe(1);
+    expect(dna?.medianClips).toBe(1);
+    expect(dna?.fullExitAfterFirstReducePct).toBe(100);
+    expect(dna?.firstReduceAtPnlPct).toBeNull();
   });
 
   it("classifies nuclear: one clip, closed in a single full exit", () => {
