@@ -21,6 +21,7 @@ import {
   formatTestMessage,
   formatWhyAnswer,
   friendlyNansenError,
+  isAgentUnavailable,
   loadStore,
   markHeld,
   nearLiquidationDecision,
@@ -45,6 +46,7 @@ import {
   type Watch,
 } from "@/lib/alarms";
 import { adverseDistancePct } from "@/lib/forced";
+import { whyFromData } from "@/lib/why";
 import { diffPositions } from "@/lib/follow";
 import { dexPrefix, fetchAllMids, fetchClearinghouseState, fetchMidsForDex } from "@/lib/hyperliquid";
 import { createSmartAlert, deleteSmartAlert } from "@/lib/intel";
@@ -52,7 +54,7 @@ import { mirrorChange } from "@/lib/mirror";
 import { logCall } from "@/lib/nansen";
 import { buildReport } from "@/lib/report";
 import { answerCallbackQuery, getUpdates, sendMessage, type ReplyMarkup } from "@/lib/telegram";
-import type { OpenPosition, WalletReport } from "@/lib/types";
+import type { Direction, OpenPosition, WalletReport } from "@/lib/types";
 
 const TICK_MS = 30_000;
 const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
@@ -101,6 +103,7 @@ function pushRecentReduce(groupKey: string, entry: RecentReduce, now: number): R
 interface WhyContext {
   leader: string;
   coin: string;
+  direction: Direction;
   question: string;
   atMs: number;
 }
@@ -353,7 +356,7 @@ async function tick(): Promise<void> {
             usdValue,
             atMs: now,
           });
-          const whyId = rememberWhyContext({ leader, coin: change.coin, question: whyQuestion, atMs: now });
+          const whyId = rememberWhyContext({ leader, coin: change.coin, direction: change.direction, question: whyQuestion, atMs: now });
           replyMarkup = whyButton(whyId);
         }
 
@@ -554,7 +557,11 @@ async function pollTelegram(): Promise<void> {
           } catch (err) {
             const reason = err instanceof Error ? err.message : String(err);
             console.error("askWhyExiting failed:", reason);
-            await sendMessage(cbChat, `Could not reach the Nansen agent: ${friendlyNansenError(reason)}`).catch(() => {});
+            // No credits (agent/fast costs 200) still gets a real answer, from data already held.
+            const fromData = isAgentUnavailable(reason)
+              ? await whyFromData(ctx.leader, ctx.coin, ctx.direction).catch(() => null)
+              : null;
+            await sendMessage(cbChat, fromData ?? `Could not reach the Nansen agent: ${friendlyNansenError(reason)}`).catch(() => {});
             continue;
           }
         }
@@ -663,7 +670,7 @@ async function pollTelegram(): Promise<void> {
             coin: watch.coin,
             direction: watch.direction,
           });
-          const whyId = rememberWhyContext({ leader: watch.leader, coin: watch.coin, question: testQuestion, atMs: Date.now() });
+          const whyId = rememberWhyContext({ leader: watch.leader, coin: watch.coin, direction: watch.direction, question: testQuestion, atMs: Date.now() });
           await sendMessage(chat, message, undefined, whyButton(whyId)).catch(() => {});
         }
       }

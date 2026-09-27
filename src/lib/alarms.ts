@@ -743,3 +743,72 @@ export function formatWhyAnswer(answer: string, tools: string[]): string {
 export function whyCacheKey(leader: string, coin: string, atMs: number): string {
   return `${leader}:${coin}:${Math.floor(atMs / 3_600_000)}`;
 }
+
+// ---------------------------------------------------------------------------
+// "Why is it exiting?" without the Nansen Agent (agent/fast costs 200 credits a call).
+// ---------------------------------------------------------------------------
+
+export interface WhyFromDataInput {
+  coin: string;
+  direction: Direction;
+  report: WalletReport | null;
+  /** tgm/position-intelligence USD by cohort for this coin; null when not cached. */
+  cohort: { smartTraderLongUsd: number; smartTraderShortUsd: number; whaleLongUsd: number; whaleShortUsd: number } | null;
+  /** Other Nansen-labeled wallets that cut this coin and side in the last hour (sentinel log). */
+  othersLastHour: { wallets: number; valueUsd: number } | null;
+}
+
+const WHY_MAX_WORDS = 80;
+
+function usdShort(n: number): string {
+  const a = Math.abs(n);
+  const s = a >= 1e9 ? `${(a / 1e9).toFixed(1)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(0)}K` : a.toFixed(0);
+  return `${n < 0 ? "-" : ""}$${s}`;
+}
+
+/** A short answer built only from numbers the product already holds, most telling first, cut at
+ * whole sentences to stay under 80 words. The header names the sources so it is never read as the
+ * Agent. null when there is nothing real to say. */
+export function buildWhyFromData(i: WhyFromDataInput): string | null {
+  const side = i.direction === "long" ? "longs" : "shorts";
+  const sentences: string[] = [];
+  const r = i.report;
+  if (r) {
+    const dna = readExitDna(r);
+    if (dna) sentences.push(dna);
+    if (r.medianWindowMin !== null) sentences.push(`After it starts selling, holders have had a median ${fmtMin(r.medianWindowMin)} before price moved 1% against them.`);
+    if (r.realizedPnlUsd !== null && r.unrealizedPnlUsd !== null) {
+      sentences.push(`30-day PnL: ${usdShort(r.realizedPnlUsd)} realized, ${usdShort(r.unrealizedPnlUsd)} still on paper.`);
+    }
+  }
+  if (i.othersLastHour) {
+    sentences.push(
+      i.othersLastHour.wallets > 0
+        ? `${i.othersLastHour.wallets} other Smart Money ${i.othersLastHour.wallets === 1 ? "wallet" : "wallets"} cut ${i.coin} ${side} in the last hour (${usdShort(i.othersLastHour.valueUsd)}).`
+        : `No other Smart Money wallet cut ${i.coin} ${side} in the last hour: this looks like its own decision, not a crowd exit.`,
+    );
+  }
+  if (i.cohort && i.cohort.smartTraderLongUsd + i.cohort.smartTraderShortUsd > 0) {
+    const c = i.cohort;
+    sentences.push(
+      `Smart Traders on ${i.coin}: ${usdShort(c.smartTraderLongUsd)} long vs ${usdShort(c.smartTraderShortUsd)} short; whales ${usdShort(c.whaleLongUsd)} vs ${usdShort(c.whaleShortUsd)}.`,
+    );
+  }
+  if (sentences.length === 0) return null;
+
+  const header = "From Nansen and Hyperliquid data:";
+  const kept: string[] = [];
+  let words = header.split(/\s+/).length;
+  for (const s of sentences) {
+    const n = s.split(/\s+/).length;
+    if (words + n > WHY_MAX_WORDS) continue;
+    kept.push(s);
+    words += n;
+  }
+  return kept.length ? `${header} ${kept.join(" ")}` : null;
+}
+
+/** An Agent failure the data answer should stand in for: no credits, a 403, or no key at all. */
+export function isAgentUnavailable(reason: string): boolean {
+  return /insufficient.credits|credits exhausted|\b403\b|NANSEN_API_KEY is not set/i.test(reason);
+}
