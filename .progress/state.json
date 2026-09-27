@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "project": {
+    "name": "nansen-meridian",
+    "created": "2026-09-27T11:12:41+00:00"
+  },
+  "features": [
+    {
+      "id": "exit-window",
+      "title": "Exit Window: measure how long a copier has after a Hyperliquid wallet starts exiting, backtest copying it at your latency, follow it live and mirror its reduces",
+      "priority": "high",
+      "tags": [],
+      "product": true,
+      "product_gate": {
+        "user": "Retail perp traders who copy Hyperliquid whales, e.g. @0x_rckfrd, @Dan4thepump1, @Doepie669",
+        "buyer": "Individual copy traders; secondary: copy-trade vault operators choosing whom to follow",
+        "job": "Decide whether a wallet is copyable at my latency, and get out when it gets out",
+        "verb": "follow a wallet and mirror its reduces (paper by default, Hyperliquid order via Nansen perp trading when keyed)",
+        "wedge": "Per-wallet exit window measured from Nansen perp-trades plus copier-latency backtest (0s/1m/5m/15m/60m)",
+        "direct_alternative": "Copin Single Backtesting (copin.io): backtests copying a Hyperliquid trader with capital/leverage/SL, but no copier latency or slippage model and no Nansen labels; Copin copy trade mirrors decreases",
+        "new_capability": "Before following: what copying this wallet returned at YOUR delay, and median minutes between its first reduce and the adverse move. While following: reduce alert stating the measured window left",
+        "kill_shot": "If Copin or Nansen already shows latency-adjusted copy PnL and exit windows, this is a feature not a product; copy bots that mirror closes instantly shrink the pain to slippage",
+        "evidence": [
+          "https://x.com/ItsJCOBx/status/2103425326453850425 Copying entries without seeing the exits is how newcomers become exit liquidity",
+          "https://x.com/0x_rckfrd/status/2103481656413655398 The only thing I'd copy is the exit, and nobody's seen it yet",
+          "https://x.com/MaxOnFumes/status/2103566125560938688 ignore what they bought, check what they DIDN'T sell",
+          "https://x.com/Doepie669/status/2101937520292384791 copy traders enter after the whale is up, whale sells, copy trader is fucked",
+          "progress/review-a*.md: 53 Meridian repos reviewed, none mirror a followed wallet's exits (Whale Street mirrors entries only)"
+        ],
+        "decision": "pass",
+        "updated": "2026-09-27T11:12:49+00:00"
+      },
+      "blocked": null,
+      "notes": [],
+      "criteria": []
+    }
+  ],
+  "customers": [],
+  "history": [
+    {
+      "ts": "2026-09-27T11:12:41+00:00",
+      "checked": 1,
+      "failed_criteria": 1
+    },
+    {
+      "ts": "2026-09-27T11:12:49+00:00",
+      "checked": 1,
+      "failed_criteria": 0
+    }
+  ],
+  "updated": "2026-09-27T11:12:49+00:00"
+}
