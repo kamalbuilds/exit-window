@@ -110,6 +110,7 @@ interface RawClearinghousePosition {
   entryPx: string;
   unrealizedPnl: string;
   leverage?: { type: string; value: number };
+  liquidationPx?: string | null;
 }
 
 // clearinghouseState, like allMids, is scoped to one dex per call - a position open on a
@@ -138,8 +139,16 @@ async function fetchClearinghouseForDex(address: string, dex: string): Promise<O
       markPx: null,
       unrealizedPnlUsd: Number(p.unrealizedPnl),
       leverage: p.leverage?.value ?? null,
+      liquidationPx: p.liquidationPx ? Number(p.liquidationPx) : null,
     };
   });
+}
+
+/** One wallet's live position on one coin, read from the coin's own dex only (one call, not the
+ * three-dex fan-out). null = the wallet holds nothing on this coin right now. */
+export async function fetchPositionOnCoin(address: string, coin: string): Promise<OpenPosition | null> {
+  const positions = await fetchClearinghouseForDex(address, dexPrefix(coin));
+  return positions.find((p) => p.coin === coin) ?? null;
 }
 
 /** The user's own open positions, straight from Hyperliquid's public account state - free, no

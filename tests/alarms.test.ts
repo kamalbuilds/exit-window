@@ -122,7 +122,7 @@ describe("formatDropMessage", () => {
 });
 
 describe("ownerStillHolds", () => {
-  const positions: OpenPosition[] = [{ coin: "ETH", direction: "long", size: 3, entryPx: 100, markPx: null, unrealizedPnlUsd: null, leverage: null }];
+  const positions: OpenPosition[] = [{ coin: "ETH", direction: "long", size: 3, entryPx: 100, markPx: null, unrealizedPnlUsd: null, leverage: null, liquidationPx: null }];
   it("is true when the coin is in the position list", () => expect(ownerStillHolds(positions, "ETH")).toBe(true));
   it("is false once the coin is gone", () => expect(ownerStillHolds(positions, "BTC")).toBe(false));
 });
@@ -395,7 +395,7 @@ describe("formatTestMessage", () => {
   it("is clearly labeled as a test and never claims a reduce happened", () => {
     const msg = formatTestMessage({
       watch: watch(),
-      leaderPosition: { coin: "ETH", direction: "long", size: 4, entryPx: 2500, markPx: null, unrealizedPnlUsd: null, leverage: null },
+      leaderPosition: { coin: "ETH", direction: "long", size: 4, entryPx: 2500, markPx: null, unrealizedPnlUsd: null, leverage: null, liquidationPx: null },
       medianWindowMin: 18,
       appUrl: "https://exit-window.example",
     });
@@ -427,11 +427,11 @@ describe("formatOnboardingMessage", () => {
       [
         {
           watch: watch({ leader: "0xleaderaddress000000000000000000000000", protect: { reducePct: 25 } }),
-          leaderPosition: { coin: "ETH", direction: "long", size: 4, entryPx: 2000, markPx: null, unrealizedPnlUsd: null, leverage: null },
+          leaderPosition: { coin: "ETH", direction: "long", size: 4, entryPx: 2000, markPx: null, unrealizedPnlUsd: null, leverage: null, liquidationPx: null },
           leaderMarkPx: 2100,
           medianWindowMin: 14,
           exitDna: "Scaler, usually 2-3 reduces before flat.",
-          ownerPosition: { coin: "ETH", direction: "long", size: 1, entryPx: 2200, markPx: null, unrealizedPnlUsd: null, leverage: null },
+          ownerPosition: { coin: "ETH", direction: "long", size: 1, entryPx: 2200, markPx: null, unrealizedPnlUsd: null, leverage: null, liquidationPx: null },
         },
       ],
       "https://exit-window.example",

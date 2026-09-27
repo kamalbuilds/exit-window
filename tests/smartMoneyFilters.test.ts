@@ -18,6 +18,8 @@ function companion(overrides: Partial<Companion> = {}): Companion {
     size: 10,
     entryPx: 5,
     upnlUsd: 0,
+    liquidationPx: null,
+    stillOpen: true,
     leverage: 1,
     cohort: "smart_money",
     ...overrides,

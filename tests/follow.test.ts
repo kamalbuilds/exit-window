@@ -5,7 +5,7 @@ import type { OpenPosition } from "../src/lib/types";
 const AT = 1_700_000_000_000;
 
 function pos(coin: string, direction: "long" | "short", size: number): OpenPosition {
-  return { coin, direction, size, entryPx: 100, markPx: null, unrealizedPnlUsd: null, leverage: null };
+  return { coin, direction, size, entryPx: 100, markPx: null, unrealizedPnlUsd: null, leverage: null, liquidationPx: null };
 }
 
 describe("diffPositions", () => {

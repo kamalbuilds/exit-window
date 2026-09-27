@@ -76,6 +76,7 @@ export interface OpenPosition {
   markPx: number | null;
   unrealizedPnlUsd: number | null;
   leverage: number | null;
+  liquidationPx: number | null; // Hyperliquid clearinghouseState; null when no price liquidates it
 }
 
 /** How this wallet tends to leave a position, distilled from its own closed episodes.
@@ -199,6 +200,13 @@ export interface Companion {
   upnlUsd: number | null;
   leverage: number | null;
   cohort: "smart_money" | "whale" | "public_figure";
+  /** Read live from Hyperliquid clearinghouseState at overlap time, not from Nansen: the price at
+   * which this wallet's position on this coin is force-closed. null = no liquidation price or the
+   * read failed. */
+  liquidationPx: number | null;
+  /** false = Hyperliquid shows the wallet no longer holds this coin on this side (Nansen's snapshot
+   * predates its exit); null = the live read failed. */
+  stillOpen: boolean | null;
 }
 
 /** GET /api/overlap/[address]: one row per open position of the user. */
@@ -208,6 +216,7 @@ export interface OverlapRow {
   size: number;
   entryPx: number;
   markPx: number | null;
+  liquidationPx: number | null; // the user's own
   companions: Companion[];
 }
 

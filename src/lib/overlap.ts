@@ -2,9 +2,9 @@
 // wallets holding the same coin and side, so "who else is in this trade" is a single call.
 // No wallet reports are built here - the UI opens /api/wallet/[addr] per companion on demand,
 // which is already cached.
-import { attachMarkPrices, fetchClearinghouseState } from "./hyperliquid";
+import { attachMarkPrices, fetchClearinghouseState, fetchPositionOnCoin } from "./hyperliquid";
 import { fetchAddressLabels, fetchTgmPerpPositions, findAnyAgeCache, NansenCreditsError, type RawCompanion } from "./nansen";
-import type { Companion, OverlapRow } from "./types";
+import type { Companion, OpenPosition, OverlapRow } from "./types";
 
 const MAX_COMPANIONS = 5;
 const MIN_SMART_MONEY = 2; // below this, top up with whale (a paid call) so the row isn't sparse
@@ -79,6 +79,22 @@ async function fetchCompanionsDegradeAware(
   }
 }
 
+/** Nansen says who is in the trade; Hyperliquid, the system of record, says where each one gets
+ * force-closed right now and whether it is still in at all. Free, one call per companion. */
+async function livePosition(
+  address: string,
+  coin: string,
+  direction: OpenPosition["direction"],
+): Promise<Pick<Companion, "liquidationPx" | "stillOpen">> {
+  try {
+    const pos = await fetchPositionOnCoin(address, coin);
+    if (!pos || pos.direction !== direction) return { liquidationPx: null, stillOpen: false };
+    return { liquidationPx: pos.liquidationPx, stillOpen: true };
+  } catch {
+    return { liquidationPx: null, stillOpen: null };
+  }
+}
+
 export async function buildOverlap(address: string): Promise<OverlapRow[]> {
   const positions = await fetchClearinghouseState(address);
   const withMarks = await attachMarkPrices(positions);
@@ -104,7 +120,11 @@ export async function buildOverlap(address: string): Promise<OverlapRow[]> {
 
       companions = companions.slice(0, MAX_COMPANIONS);
       const withLabels: Companion[] = await Promise.all(
-        companions.map(async (c) => ({ ...c, displayLabel: await resolveDisplayLabel(c, lookupBudget) })),
+        companions.map(async (c) => ({
+          ...c,
+          displayLabel: await resolveDisplayLabel(c, lookupBudget),
+          ...(await livePosition(c.address, p.coin, p.direction)),
+        })),
       );
 
       return {
@@ -113,6 +133,7 @@ export async function buildOverlap(address: string): Promise<OverlapRow[]> {
         size: p.size,
         entryPx: p.entryPx,
         markPx: p.markPx,
+        liquidationPx: p.liquidationPx,
         companions: withLabels,
       };
     }),

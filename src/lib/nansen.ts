@@ -691,6 +691,7 @@ function toOpenPosition(p: RawPosition): OpenPosition {
     markPx: null,
     unrealizedPnlUsd: p.unrealized_pnl_usd !== undefined ? Number(p.unrealized_pnl_usd) : null,
     leverage: p.leverage_value ?? null,
+    liquidationPx: p.liquidation_price_usd ? Number(p.liquidation_price_usd) : null,
   };
 }
 
@@ -835,7 +836,7 @@ export async function fetchSmartMoneyPerpTrades(
  * canonicalized request body. */
 /** Companion row before displayLabel is resolved (overlap.ts's job: a leaderboard label is
  * sometimes a referral-code label, worth a real address/labels lookup before it's shown). */
-export type RawCompanion = Omit<Companion, "displayLabel">;
+export type RawCompanion = Omit<Companion, "displayLabel" | "liquidationPx" | "stillOpen">;
 
 export async function fetchTgmPerpPositions(
   coin: string,
