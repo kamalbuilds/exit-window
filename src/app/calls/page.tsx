@@ -10,7 +10,7 @@ interface CallLine {
   source?: "memory" | "disk" | "seed";
   status?: number;
   latencyMs?: number;
-  rows?: number;
+  rows?: number | null;
   requestSummary?: Record<string, unknown>;
 }
 
@@ -130,8 +130,9 @@ export default function CallsPage() {
                         {c.cache === "hit" ? (
                           <span className="text-ink-3">cache {c.source ?? ""}</span>
                         ) : (
-                          <span className={c.status && c.status >= 400 ? "text-late" : "text-lume"}>
-                            {c.status ?? ""} {c.rows !== undefined ? `· ${c.rows} rows` : ""} {c.latencyMs !== undefined ? `· ${c.latencyMs}ms` : ""}
+                          <span className={c.status === 0 || (c.status ?? 0) >= 400 ? "text-late" : "text-lume"}>
+                            {c.status === 0 ? "timeout" : (c.status ?? "")} {c.rows !== undefined && c.rows !== null ? `· ${c.rows} rows` : ""}{" "}
+                            {c.latencyMs !== undefined ? `· ${c.latencyMs}ms` : ""}
                           </span>
                         )}
                       </td>
