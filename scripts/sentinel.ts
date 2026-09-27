@@ -5,7 +5,7 @@
 // 30 minutes. Run forever with `npx tsx scripts/sentinel.ts`, or exit after N sweeps with
 // `--sweeps N` (used for a bounded local test run).
 import { diffPositions } from "@/lib/follow";
-import { dexPrefix, fetchClearinghouseState, fetchMidsForDex } from "@/lib/hyperliquid";
+import { dexPrefix, fetchClearinghouseForDex, fetchMidsForDex } from "@/lib/hyperliquid";
 import { appendEvents, buildEvent, loadWatchlistFromDisk, writeSnapshot, type LiveExitEvent, type WatchlistEntry } from "@/lib/sentinel";
 import type { OpenPosition } from "@/lib/types";
 
@@ -13,6 +13,12 @@ const SWEEP_MS = 60_000;
 const CONCURRENCY = 8;
 const WATCHLIST_REFRESH_MS = 30 * 60_000;
 const MAX_429_RETRIES = 3;
+// Hyperliquid allows 1200 weight/min per IP and clearinghouseState costs 2 per dex. Polling all
+// three dexes for 242 wallets every minute is 1452, over the limit on its own and starving the web
+// app on the same machine. The main dex is polled every sweep; builder dexes every Nth sweep, with
+// their last-known positions carried in between.
+const HIP3_DEXES = ["xyz", "io"];
+const HIP3_EVERY = 5;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,15 +27,15 @@ function sleep(ms: number): Promise<void> {
 /** Small jitter before every request (spreads a concurrency-8 batch across the second instead of
  * firing all 8 at once), plus exponential backoff and retry specifically on a 429 - other errors
  * (a timed-out or delisted-account read) just skip this address for the sweep and log. */
-async function fetchPositionsWithBackoff(address: string, attempt = 0): Promise<OpenPosition[] | null> {
+async function fetchPositionsWithBackoff(address: string, dexes: string[], attempt = 0): Promise<OpenPosition[] | null> {
   await sleep(Math.random() * 250);
   try {
-    return await fetchClearinghouseState(address);
+    return (await Promise.all(dexes.map((dex) => fetchClearinghouseForDex(address, dex)))).flat();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("429") && attempt < MAX_429_RETRIES) {
       await sleep(1000 * 2 ** attempt + Math.random() * 300);
-      return fetchPositionsWithBackoff(address, attempt + 1);
+      return fetchPositionsWithBackoff(address, dexes, attempt + 1);
     }
     console.error(`sentinel: clearinghouseState failed for ${address}: ${msg}`);
     return null;
@@ -52,6 +58,7 @@ async function sweep(watchlist: WatchlistEntry[]): Promise<void> {
     return mids[coin] ?? null;
   }
 
+  const fullSweep = sweepCount % HIP3_EVERY === 0;
   let polled = 0;
   let errors = 0;
   const newEvents: LiveExitEvent[] = [];
@@ -60,13 +67,14 @@ async function sweep(watchlist: WatchlistEntry[]): Promise<void> {
     const batch = watchlist.slice(i, i + CONCURRENCY);
     await Promise.all(
       batch.map(async (entry) => {
-        const next = await fetchPositionsWithBackoff(entry.address);
+        const fetched = await fetchPositionsWithBackoff(entry.address, fullSweep ? ["", ...HIP3_DEXES] : [""]);
         polled++;
-        if (next === null) {
+        if (fetched === null) {
           errors++;
           return;
         }
         const prev = snapshots.get(entry.address) ?? [];
+        const next = fullSweep ? fetched : [...fetched, ...prev.filter((p) => dexPrefix(p.coin) !== "")];
         snapshots.set(entry.address, next);
         const changes = diffPositions(prev, next, Date.now());
         for (const change of changes) {

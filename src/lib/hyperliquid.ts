@@ -120,7 +120,7 @@ interface RawClearinghousePosition {
 // if a position on another HIP-3 dex needs covering.
 const CLEARINGHOUSE_DEXES = ["", "xyz", "io"];
 
-async function fetchClearinghouseForDex(address: string, dex: string): Promise<OpenPosition[]> {
+export async function fetchClearinghouseForDex(address: string, dex: string): Promise<OpenPosition[]> {
   const res = await fetch("https://api.hyperliquid.xyz/info", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
