@@ -27,6 +27,40 @@ Copy traders keep saying the same thing:
 
 Nansen asked the same question from the other side: *"the more interesting one is how, what they bought, when, how they sized it, when they got out"* ([@nansen_ai](https://x.com/nansen_ai/status/2076633833190068243)). Every other tool answers "who is buying". Exit Window answers "the wallet in your trade is leaving: how long do you have".
 
+## What you see
+
+**Your trades.** Paste your Hyperliquid address. Every position, the Smart Money on the same side, how far above them you bought, and a live chart of your entry against theirs with every Smart Money buy and sell marked.
+
+![Your trades: your entry against the Smart Money in your trade](docs/screenshots/your-trades.png)
+
+**Exiting now.** Live Smart Money reduces on Hyperliquid, exit pressure by coin, and a dial timing the latest exit.
+
+![Smart Money exiting now](docs/screenshots/home.png)
+
+**Wallet report.** Exit DNA, the alarm replay, and every exit timed on one log scale: how long a holder had after this wallet started selling, and which copier delays got out in time.
+
+![Wallet report: Exit DNA and every exit timed](docs/screenshots/wallet.png)
+
+**Share a wallet's Exit DNA.** Every report renders its own social card.
+
+![Exit DNA card](docs/screenshots/exit-dna-card.png)
+
+## The loop
+
+```mermaid
+flowchart LR
+  A[Your Hyperliquid address] --> B[Your open positions<br/>Hyperliquid clearinghouse]
+  B --> C[Smart Money on the same side<br/>Nansen tgm/perp-positions + labels]
+  C --> D[How each one exits<br/>Nansen profiler/perp-trades<br/>+ Hyperliquid candles]
+  D --> E[Exit windows, Exit DNA,<br/>alarm replay, latency tax]
+  C --> F[Arm Telegram alarm]
+  F --> G[Worker: 30 s tick on those wallets]
+  G -->|a watched wallet reduces| H[Telegram alert with window,<br/>Exit DNA and consensus]
+  H --> I[Why is it exiting?<br/>Nansen Agent API]
+  H --> J[Protection rule: cut your position<br/>Nansen perp/close + perp/execute]
+  F --> K[Nansen Smart Alert on the spot token<br/>signed webhook into the same chat]
+```
+
 ## How Nansen drives it
 
 | Nansen endpoint | What it decides in the product | Code |
