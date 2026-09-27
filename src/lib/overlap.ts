@@ -89,15 +89,33 @@ async function fetchCompanionsDegradeAware(
   }
 }
 
+const SNAPSHOT_FRESH_MS = 90_000; // the sentinel sweeps the main dex every 60s
+const LIVE_TTL_MS = 30_000;
+const liveCache = new Map<string, { at: number; pos: Promise<OpenPosition | null> }>();
+
+/** One Hyperliquid read per wallet+coin per 30s, shared across concurrent overlap requests. */
+function cachedPositionOnCoin(address: string, coin: string): Promise<OpenPosition | null> {
+  const key = `${address.toLowerCase()}|${coin}`;
+  const hit = liveCache.get(key);
+  if (hit && Date.now() - hit.at < LIVE_TTL_MS) return hit.pos;
+  const pos = fetchPositionOnCoin(address, coin);
+  liveCache.set(key, { at: Date.now(), pos });
+  pos.catch(() => liveCache.delete(key));
+  return pos;
+}
+
 /** Nansen says who is in the trade; Hyperliquid, the system of record, says where each one gets
- * force-closed right now and whether it is still in at all. Free, one call per companion. */
+ * force-closed right now and whether it is still in at all. A wallet the sentinel swept under 90s
+ * ago on the main dex is answered from that sweep (no call); anyone else is read live, cached 30s. */
 async function livePosition(
   address: string,
   coin: string,
   direction: OpenPosition["direction"],
+  swept: Map<string, OpenPosition[]> | null,
 ): Promise<Pick<Companion, "liquidationPx" | "stillOpen">> {
   try {
-    const pos = await fetchPositionOnCoin(address, coin);
+    const known = dexPrefix(coin) === "" ? swept?.get(address.toLowerCase()) : undefined;
+    const pos = known ? (known.find((p) => p.coin === coin) ?? null) : await cachedPositionOnCoin(address, coin);
     if (!pos || pos.direction !== direction) return { liquidationPx: null, stillOpen: false };
     return { liquidationPx: pos.liquidationPx, stillOpen: true };
   } catch {
@@ -110,6 +128,11 @@ export async function buildOverlap(address: string): Promise<OverlapRow[]> {
   const withMarks = await attachMarkPrices(positions);
   const lower = address.toLowerCase();
   const lookupBudget = { left: MAX_LABEL_LOOKUPS_PER_REQUEST }; // shared across all rows in this request
+  const snapshot = await readSnapshot();
+  const swept =
+    snapshot && Date.now() - snapshot.at < SNAPSHOT_FRESH_MS
+      ? new Map(snapshot.wallets.map((w) => [w.address.toLowerCase(), w.positions]))
+      : null;
 
   return Promise.all(
     withMarks.map(async (p): Promise<OverlapRow> => {
@@ -133,7 +156,7 @@ export async function buildOverlap(address: string): Promise<OverlapRow[]> {
         companions.map(async (c) => ({
           ...c,
           displayLabel: await resolveDisplayLabel(c, lookupBudget),
-          ...(await livePosition(c.address, p.coin, p.direction)),
+          ...(await livePosition(c.address, p.coin, p.direction, swept)),
         })),
       );
 
