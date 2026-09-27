@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { XLogo } from "@phosphor-icons/react";
 import { use, useState, type ReactNode } from "react";
 import type { AlarmReplay, Episode, ExitDna, ExitWindow, WalletReport } from "@/lib/types";
 import { Chronograph } from "@/components/Chronograph";
@@ -98,7 +99,17 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
   return (
     <div className="flex flex-col gap-6">
       <section className="panel p-4 lg:p-5">
-        <p className="fig text-[13px] text-ink-2 break-all">{address}</p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="fig text-[13px] text-ink-2 break-all">{address}</p>
+          <a
+            href={`https://x.com/intent/post?text=${encodeURIComponent(`${v.lead} How fast does the Smart Money in your trade get out? Built on @nansen_ai`)}&url=${encodeURIComponent(`https://exit-window.fly.dev/w/${address}`)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="btn-secondary h-9 px-3 inline-flex items-center gap-2 text-[13px] no-underline whitespace-nowrap shrink-0"
+          >
+            <XLogo size={15} weight="bold" /> Share Exit DNA
+          </a>
+        </div>
         <ClusterLine address={address} />
 
         <h1 className={`display text-[24px] mt-3 max-w-[52ch] ${v.tone === "late" ? "text-late" : v.tone === "lume" ? "text-lume" : "text-ink"}`}>{v.lead}</h1>
