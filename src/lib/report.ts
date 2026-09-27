@@ -2,6 +2,7 @@
 // backtest the latency tax, and settle on a verdict. This is the one call the UI needs per wallet.
 import { attachMarkPrices, fetchCandles, intervalForAge, type Candle } from "./hyperliquid";
 import { fetchPerpTrades, fetchPerpPositions, fetchPnlSummary, currentNetworkCallCount, networkCallsSince } from "./nansen";
+import { loadFills, saveFills, mergeFills } from "./fills-store";
 import { fillsToEpisodes } from "./positions";
 import { measureWindow } from "./exitwindow";
 import { latencyTax, buildVerdict } from "./backtest";
@@ -33,7 +34,7 @@ async function mapBounded<T, R>(items: T[], limit: number, fn: (item: T, index: 
   return results;
 }
 
-async function fetchAllFills(address: string, from: string, to: string): Promise<Fill[]> {
+async function fetchRange(address: string, from: string, to: string): Promise<Fill[]> {
   const fills: Fill[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
     const { data } = await fetchPerpTrades(address, from, to, page, PER_PAGE);
@@ -41,6 +42,34 @@ async function fetchAllFills(address: string, from: string, to: string): Promise
     if (data.isLastPage || data.fills.length === 0) break;
   }
   return fills;
+}
+
+/** Buys only what the persisted store hasn't already got: [lastSeen, to] going forward (usually
+ * 1 page, since most of a wallet's history hasn't changed since the last report), plus
+ * [from, earliestSeen] on the rare call that asks further back than anything stored. */
+async function fetchAllFills(address: string, from: string, to: string): Promise<Fill[]> {
+  const stored = await loadFills(address);
+  const fetched: Fill[] = [];
+
+  if (!stored) {
+    fetched.push(...(await fetchRange(address, from, to)));
+  } else {
+    if (Date.parse(from) < Date.parse(stored.earliestSeen)) {
+      fetched.push(...(await fetchRange(address, from, stored.earliestSeen)));
+    }
+    if (Date.parse(to) > Date.parse(stored.lastSeen)) {
+      fetched.push(...(await fetchRange(address, stored.lastSeen, to)));
+    }
+  }
+
+  const merged = mergeFills(stored?.fills ?? [], fetched);
+  const earliestSeen = stored && Date.parse(stored.earliestSeen) < Date.parse(from) ? stored.earliestSeen : from;
+  const lastSeen = stored && Date.parse(stored.lastSeen) > Date.parse(to) ? stored.lastSeen : to;
+  await saveFills(address, { earliestSeen, lastSeen, fills: merged });
+
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  return merged.filter((f) => f.t >= fromMs && f.t <= toMs);
 }
 
 /** Candle range covering everything the exit-window measurement and the latency backtest need:
@@ -89,10 +118,25 @@ function classifyExitStyle(episodes: Episode[]): WalletReport["exitStyle"] {
 const reportCache = new Map<string, { report: WalletReport; cachedAt: number }>();
 const REPORT_CACHE_TTL_MS = 10 * 60_000;
 
+function reportCacheKey(address: string, options: BuildReportOptions): string {
+  const lookbackDays = options.lookbackDays ?? 30;
+  const maxEpisodes = options.maxEpisodes ?? 25;
+  return `${address.toLowerCase()}::${lookbackDays}::${maxEpisodes}`;
+}
+
+/** The cached report if one exists and hasn't expired, without ever touching the network -
+ * for GET /api/wallet/[address]?cached=1, which the home hero uses so listing exiting wallets
+ * never burns Nansen credits on wallets nobody has opened a full report for yet. */
+export function getCachedReport(address: string, options: BuildReportOptions = {}): WalletReport | null {
+  const cached = reportCache.get(reportCacheKey(address, options));
+  if (!cached || Date.now() - cached.cachedAt >= REPORT_CACHE_TTL_MS) return null;
+  return cached.report;
+}
+
 export async function buildReport(address: string, options: BuildReportOptions = {}): Promise<WalletReport> {
   const lookbackDays = options.lookbackDays ?? 30;
   const maxEpisodes = options.maxEpisodes ?? 25;
-  const cacheKey = `${address.toLowerCase()}::${lookbackDays}::${maxEpisodes}`;
+  const cacheKey = reportCacheKey(address, options);
 
   const cached = reportCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < REPORT_CACHE_TTL_MS) return cached.report;

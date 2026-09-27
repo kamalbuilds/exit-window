@@ -13,6 +13,8 @@ export interface Fill {
   closedPnl: number;
   feeUsd: number;
   hash: string;
+  oid: number; // Hyperliquid order id; the only reliably-unique per-fill key (transaction_hash is a
+  // constant placeholder on most rows), used to dedupe when merging incrementally-fetched fills.
 }
 
 export interface Tranche {
@@ -113,7 +115,9 @@ export interface PositionChange {
   at: number;
 }
 
-/** A labeled wallet holding the same coin and side as the user (Nansen tgm/perp-positions). */
+/** A labeled wallet holding the same coin and side as the user (Nansen tgm/perp-positions).
+ * cohort records which label_type query found it: smart_money first, whale only used to top up
+ * when fewer than 3 same-side smart_money holders exist. */
 export interface Companion {
   address: string;
   label: string | null;
@@ -122,6 +126,7 @@ export interface Companion {
   entryPx: number;
   upnlUsd: number | null;
   leverage: number | null;
+  cohort: "smart_money" | "whale" | "public_figure";
 }
 
 /** GET /api/overlap/[address]: one row per open position of the user. */

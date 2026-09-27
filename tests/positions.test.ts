@@ -10,6 +10,7 @@ function fill(partial: Partial<Fill> & Pick<Fill, "t" | "isBuy" | "px" | "sz" | 
     closedPnl: 0,
     feeUsd: 0,
     hash: "0xabc",
+    oid: 0,
     ...partial,
   };
 }

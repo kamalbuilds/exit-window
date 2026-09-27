@@ -131,16 +131,17 @@ function callLogPath(): string {
   return path.join(process.cwd(), "data", "nansen-calls.jsonl");
 }
 
-interface CallLogEntry {
+export interface CallLogEntry {
   ts: string;
   endpoint: string;
-  method: "GET" | "POST";
+  cache: "hit" | "miss";
   requestSummary: Record<string, unknown>;
-  status: number;
-  latencyMs: number;
-  rows: number | null;
-  rateLimitRemaining: number | null;
-  cache: "miss";
+  method?: "GET" | "POST";
+  source?: "memory" | "disk" | "seed";
+  status?: number;
+  latencyMs?: number;
+  rows?: number | null;
+  rateLimitRemaining?: number | null;
   error?: string;
 }
 
@@ -156,6 +157,12 @@ function summarizeRequest(body: Json, query?: Record<string, string>): Record<st
   if (typeof b.token_symbol === "string") out.tokenSymbol = b.token_symbol;
   if (b.date && typeof b.date === "object") out.date = b.date;
   if (typeof b.lookback_hours === "number") out.lookbackHours = b.lookback_hours;
+  const pagination = b.pagination;
+  if (pagination && typeof pagination === "object") {
+    const page = (pagination as Record<string, unknown>).page;
+    if (typeof page === "number") out.page = page;
+  }
+  if (typeof q.page === "string" && q.page.trim() !== "") out.page = Number(q.page);
   return out;
 }
 
@@ -165,14 +172,51 @@ function rowsOf(json: Json): number | null {
   return Array.isArray(data) ? data.length : null;
 }
 
-async function logCall(entry: Omit<CallLogEntry, "ts" | "cache">): Promise<void> {
+async function logCall(entry: Omit<CallLogEntry, "ts">): Promise<void> {
   try {
     await mkdir(path.dirname(callLogPath()), { recursive: true });
-    const line: CallLogEntry = { ts: new Date().toISOString(), cache: "miss", ...entry };
+    const line: CallLogEntry = { ts: new Date().toISOString(), ...entry };
     await appendFile(callLogPath(), `${JSON.stringify(line)}\n`);
   } catch {
     // ponytail: best-effort append-only log; a failure here must never break a real request.
   }
+}
+
+// ---------------------------------------------------------------------------
+// Read-side: merges the committed log with the Vercel /tmp log (writes on Vercel go to /tmp
+// since the deployment filesystem is read-only outside it; judges still need to see both).
+// ---------------------------------------------------------------------------
+
+async function readLogFile(file: string): Promise<CallLogEntry[]> {
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out: CallLogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as CallLogEntry);
+    } catch {
+      // ponytail: skip a truncated last line rather than fail the whole read.
+    }
+  }
+  return out;
+}
+
+const COMMITTED_LOG_PATH = path.join(process.cwd(), "data", "nansen-calls.jsonl");
+
+/** All logged calls, newest last. On Vercel this is the committed log (whatever was checked in
+ * up to the last deploy) plus /tmp/nansen-calls.jsonl (what this running instance has hit since);
+ * elsewhere it is just the one file callLogPath() already points at. */
+export async function readCallLog(): Promise<CallLogEntry[]> {
+  const files = process.env.VERCEL ? [COMMITTED_LOG_PATH, callLogPath()] : [callLogPath()];
+  const unique = [...new Set(files)];
+  const all = (await Promise.all(unique.map(readLogFile))).flat();
+  all.sort((a, b) => a.ts.localeCompare(b.ts));
+  return all;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,18 +311,21 @@ export async function nansenCall<T>(
     const mem = memCache.get(key);
     if (mem && Date.now() - mem.fetchedAt < ttl) {
       bump(ledger.cacheHits, endpoint);
+      void logCall({ endpoint, requestSummary: summarizeRequest(body, opts.query), cache: "hit", source: "memory" });
       return { data: mem.data as T, fetchedAt: mem.fetchedAt, stale: !!mem.stale };
     }
     const disk = await readJson(path.join(cacheDir(), `${hash}.json`));
     if (disk && Date.now() - disk.fetchedAt < ttl) {
       memCache.set(key, disk);
       bump(ledger.cacheHits, endpoint);
+      void logCall({ endpoint, requestSummary: summarizeRequest(body, opts.query), cache: "hit", source: "disk" });
       return { data: disk.data as T, fetchedAt: disk.fetchedAt, stale: !!disk.stale };
     }
     const seed = await readJson(path.join(SEED_DIR, `${hash}.json`));
     if (seed && Date.now() - seed.fetchedAt < ttl) {
       memCache.set(key, seed);
       bump(ledger.cacheHits, endpoint);
+      void logCall({ endpoint, requestSummary: summarizeRequest(body, opts.query), cache: "hit", source: "seed" });
       return { data: seed.data as T, fetchedAt: seed.fetchedAt, stale: !!seed.stale };
     }
   }
@@ -292,6 +339,7 @@ export async function nansenCall<T>(
         bump(ledger.network, endpoint);
         void logCall({
           endpoint,
+          cache: "miss",
           method: opts.method ?? "POST",
           requestSummary: summarizeRequest(body, opts.query),
           status: raw.status,
@@ -308,6 +356,7 @@ export async function nansenCall<T>(
       } catch (err) {
         void logCall({
           endpoint,
+          cache: "miss",
           method: opts.method ?? "POST",
           requestSummary: summarizeRequest(body, opts.query),
           status: 0,
@@ -351,6 +400,7 @@ function toFill(row: {
   closed_pnl: number;
   fee_usd: number;
   transaction_hash: string;
+  oid: number;
 }): Fill {
   const isBuy =
     (row.side === "Long" && (row.action === "Open" || row.action === "Add")) ||
@@ -365,6 +415,7 @@ function toFill(row: {
     closedPnl: row.closed_pnl,
     feeUsd: row.fee_usd,
     hash: row.transaction_hash,
+    oid: row.oid,
   };
 }
 
@@ -526,19 +577,22 @@ export async function fetchSmartMoneyPerpTrades(
   );
 }
 
-/** Labeled wallets (smart money) currently holding `coin` on `side`, for the overlap feature:
- * "who else is in this trade." Point-in-time snapshot, no date range - cached 10 min per
- * (coin, side) since the cache key is the full canonicalized request body. */
+/** Labeled wallets currently holding `coin` on `side`, for the overlap feature: "who else is in
+ * this trade." labelType picks the cohort (smart_money first; overlap.ts tops up with whale when
+ * fewer than 3 same-side smart_money holders survive excluding the user). Point-in-time snapshot,
+ * no date range - cached 10 min per (coin, side, labelType) since the cache key is the full
+ * canonicalized request body. */
 export async function fetchTgmPerpPositions(
   coin: string,
   side: "Long" | "Short",
+  labelType: "smart_money" | "whale" | "public_figure" = "smart_money",
   perPage = 10,
 ): Promise<CachedResult<Companion[]>> {
   return nansenCall(
     "tgm/perp-positions",
     {
       token_symbol: coin,
-      label_type: "smart_money",
+      label_type: labelType,
       pagination: { page: 1, per_page: perPage },
       filters: { side },
       order_by: [{ field: "position_value_usd", direction: "DESC" }],
@@ -554,6 +608,7 @@ export async function fetchTgmPerpPositions(
           entryPx: Number(r.entry_price ?? 0),
           upnlUsd: r.upnl_usd !== undefined ? Number(r.upnl_usd) : null,
           leverage: r.leverage !== undefined ? Number(r.leverage) : null,
+          cohort: labelType,
         }),
       );
     },

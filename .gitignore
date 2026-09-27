@@ -47,3 +47,6 @@ progress/raw/aa-data/
 
 # Telegram alarm store (chat bindings; not secret, but not build output either)
 /data/alarms.json
+
+# Persisted fills per address (incremental Nansen fetch cache; not secret, not seed data)
+/data/fills/
