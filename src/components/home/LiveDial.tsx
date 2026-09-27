@@ -6,34 +6,92 @@ import type { WalletReport } from "@/lib/types";
 import { Chronograph } from "../Chronograph";
 import { type FeedItem } from "../feed";
 import { formatClock, formatMinutes, formatUsd, shortAddr, toMs } from "../format";
-import { usePoll } from "../usePoll";
+
+const CANDIDATES = 5;
 
 function Elapsed({ since }: { since: number }) {
-  const [now, setNow] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
-    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-  if (now === null) return <>--:--</>;
   const sec = Math.max(0, (now - since) / 1000);
   return <>{sec >= 3600 ? formatMinutes(sec / 60) : formatClock(sec)}</>;
 }
 
-/** The newest real Smart Money reduce, timed live against that wallet's measured median window. */
-export function LiveDial({ exit, loading }: { exit: FeedItem | null; loading: boolean }) {
-  // Cached reports only: timing every new exiting wallet here would spend ~7 Nansen calls a minute.
-  const report = usePoll<WalletReport>(exit ? `/api/wallet/${exit.trader_address}?cached=1` : null, 0);
+interface Pick {
+  exit: FeedItem;
+  report: WalletReport | null; // set only once a cached report with a measured window is found
+  checking: boolean;
+}
+
+/** Picks the most recent Smart Money reduce that already has a cached report with a measured
+ * window. Probes up to 5 newest candidates one at a time via ?cached=1 (a cache read, never a
+ * Nansen call), stopping at the first with medianWindowMin != null. If none of the probed
+ * candidates have a window yet, falls back to the newest reduce, unwindowed. */
+interface Resolved {
+  key: string;
+  exit: FeedItem;
+  report: WalletReport | null;
+}
+
+function usePickLiveExit(candidates: FeedItem[]): Pick | null {
+  const [resolved, setResolved] = useState<Resolved | null>(null);
+  const key = candidates
+    .slice(0, CANDIDATES)
+    .map((c) => `${c.trader_address}-${c.timestamp}`)
+    .join(",");
+
+  useEffect(() => {
+    if (candidates.length === 0) return;
+    let cancelled = false;
+
+    (async () => {
+      for (const exit of candidates.slice(0, CANDIDATES)) {
+        if (cancelled) return;
+        try {
+          const res = await fetch(`/api/wallet/${exit.trader_address}?cached=1`);
+          if (res.ok) {
+            const report = (await res.json()) as WalletReport;
+            if (report.medianWindowMin != null) {
+              if (!cancelled) setResolved({ key, exit, report });
+              return;
+            }
+          }
+        } catch {
+          // try the next candidate
+        }
+      }
+      if (!cancelled) setResolved({ key, exit: candidates[0], report: null });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // key captures the candidate set; candidates itself is a new array every poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  if (candidates.length === 0) return null;
+  if (resolved && resolved.key === key) return { exit: resolved.exit, report: resolved.report, checking: false };
+  // resolution for this candidate set hasn't landed yet: show the newest candidate optimistically
+  return { exit: candidates[0], report: null, checking: true };
+}
+
+/** The most recent Smart Money reduce with a known exit window, timed live against it. */
+export function LiveDial({ exits, loading }: { exits: FeedItem[]; loading: boolean }) {
+  const pick = usePickLiveExit(exits);
+  const exit = pick?.exit ?? null;
   const since = exit ? toMs(exit.timestamp) : null;
-  const median = report.data?.medianWindowMin;
-  const who = exit ? exit.trader_address_label ?? shortAddr(exit.trader_address) : "";
+  const median = pick?.report?.medianWindowMin;
+  const who = exit ? (exit.trader_address_label ?? shortAddr(exit.trader_address)) : "";
 
   return (
     <div className="flex flex-col gap-5">
       <Chronograph
         size={600}
         startedAt={since}
-        windowMin={report.data ? median ?? null : undefined}
+        windowMin={pick?.report ? (median ?? null) : undefined}
         title={exit ? `${who} started reducing ${exit.token_symbol}; live elapsed time against its measured exit window` : "Waiting for a live Smart Money exit"}
       >
         {exit && since ? (
@@ -43,13 +101,15 @@ export function LiveDial({ exit, loading }: { exit: FeedItem | null; loading: bo
               <Elapsed since={since} />
             </span>
             <span className="mt-3 text-[13px] text-ink-2 leading-snug">
-              {report.loading
-                ? "Checking this wallet's timed exits"
-                : median != null
-                  ? <>its windows close in <span className="fig text-ink">{formatMinutes(median)}</span> (median)</>
-                  : report.data
-                    ? "no closed window measured yet"
-                    : "open the wallet to time its exits"}
+              {pick?.checking ? (
+                "Checking this wallet's timed exits"
+              ) : median != null ? (
+                <>
+                  its windows close in <span className="fig text-ink">{formatMinutes(median)}</span> (median)
+                </>
+              ) : (
+                "open the wallet to time it"
+              )}
             </span>
           </>
         ) : (

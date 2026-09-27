@@ -11,7 +11,7 @@ export function TimingTower() {
   const { data, loading, error, refresh } = usePoll<LeaderRow[]>("/api/leaders", 0);
   if (error) return <ErrorState message={`The leaderboard did not load (${error}).`} onRetry={refresh} />;
   if (loading && !data) return <LoadingRows label="leaderboard" rows={6} />;
-  const rows = (data ?? []).slice(0, 16);
+  const rows = (data ?? []).slice(0, 10);
   if (rows.length === 0) return <EmptyState title="Nansen returned no leaderboard rows for the last 30 days." />;
 
   const half = Math.ceil(rows.length / 2);

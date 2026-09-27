@@ -15,9 +15,8 @@ function ago(ms: number, now: number): string {
 
 /** Newest Smart Money reduces, like a lap list: time since, coin, who, size. */
 export function LapList({ exits, loading, error, onRetry }: { exits: FeedItem[]; loading: boolean; error: string | null; onRetry: () => void }) {
-  const [now, setNow] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
-    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
@@ -34,7 +33,7 @@ export function LapList({ exits, loading, error, onRetry }: { exits: FeedItem[];
             href={`/w/${f.trader_address}`}
             className="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-baseline gap-3 py-2.5 no-underline text-ink transition-[background-color] duration-150 hover:bg-bezel"
           >
-            <span className="fig text-[13px] text-late">{now === null ? "" : ago(toMs(f.timestamp), now)}</span>
+            <span className="fig text-[13px] text-late">{ago(toMs(f.timestamp), now)}</span>
             <span className="min-w-0 truncate">
               <span className="fig text-[14px]">{f.token_symbol}</span>
               <span className="text-[13px] text-ink-3"> {f.side === "Long" ? "long" : "short"} reduced by </span>
