@@ -16,7 +16,10 @@ function windowStatusText(q: QueuedWalletState): string {
   if (q.status === "queued" || q.status === "loading") return "timing";
   if (q.status === "retrying") return `Nansen timed out, retrying in ${q.retryAfterSec ?? 5}s`;
   if (q.status === "error") return q.error ?? "timing failed";
-  return q.data?.medianWindowMin != null ? formatMinutes(q.data.medianWindowMin) : "no exit measured in 30 days";
+  if (q.data?.medianWindowMin != null) return formatMinutes(q.data.medianWindowMin);
+  // A degraded report with no fills means we could not fetch this wallet's history, not that it never exited.
+  if (q.data?.degraded && q.data.episodesAnalyzed === 0) return "timing when Nansen data refreshes";
+  return "no exit measured in 30 days";
 }
 
 /** Full sentence for the position headline; the duration case reads "you have <window>.", every
