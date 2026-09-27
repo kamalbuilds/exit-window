@@ -1,66 +1,110 @@
+/* Hallmark · macrostructure: Chronograph bench · theme: porcelain dial, ink and vermilion
+ * Tokens mirror DESIGN.md. Components use these names, never raw hex. */
 @import "tailwindcss";
 
-:root {
-  --bg: #0b0a08;
-  --bg-raised: #14120d;
-  --line: rgba(245, 241, 232, 0.12);
-  --line-strong: rgba(245, 241, 232, 0.22);
-  --fg: #f5f1e8;
-  --fg-dim: #a89f8c;
-  --fg-faint: #6b6455;
-  --amber: #f5a623;
-  --amber-dim: rgba(245, 166, 35, 0.16);
-  --red: #ff5a36;
-  --red-dim: rgba(255, 90, 54, 0.16);
-  --green: #5fa66b;
-  --green-dim: rgba(95, 166, 107, 0.14);
+@theme {
+  --color-paper: #f2eee5;
+  --color-dial: #fbf9f4;
+  --color-bezel: #e6e0d2;
+  --color-rule: #d2cbbb;
+  --color-ink: #16181c;
+  --color-ink-2: #474a51;
+  --color-ink-3: #686b72;
+  --color-window: #16181c1f;
+  --color-late: #c23a1e;
+  --color-late-wash: #c23a1e14;
+  --color-lume: #1e7349;
+  --color-lume-wash: #1e734914;
+  --color-focus: #16181c;
+
+  --font-display: var(--font-bricolage), ui-sans-serif, sans-serif;
+  --font-body: var(--font-schibsted), ui-sans-serif, sans-serif;
+  --font-figure: var(--font-martian), ui-monospace, monospace;
+
+  --radius-control: 2px;
+  --ease-draw: cubic-bezier(0.2, 0, 0, 1);
 }
 
-@theme inline {
-  --color-bg: var(--bg);
-  --color-bg-raised: var(--bg-raised);
-  --color-line: var(--line);
-  --color-line-strong: var(--line-strong);
-  --color-fg: var(--fg);
-  --color-fg-dim: var(--fg-dim);
-  --color-fg-faint: var(--fg-faint);
-  --color-amber: var(--amber);
-  --color-amber-dim: var(--amber-dim);
-  --color-red: var(--red);
-  --color-red-dim: var(--red-dim);
-  --color-green: var(--green);
-  --color-green-dim: var(--green-dim);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-* {
-  border-color: var(--line);
-}
-
-html {
-  color-scheme: dark;
+html,
+body {
+  overflow-x: clip;
 }
 
 body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
 }
 
-.num {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-feature-settings: "tnum" 1, "zero" 1;
-  font-variant-numeric: tabular-nums slashed-zero;
+/* Every number, time, address and coin. */
+.fig {
+  font-family: var(--font-figure);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.label {
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-style: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+a {
+  text-underline-offset: 3px;
+}
+
+/* Arc draw on first paint; off under reduced motion. */
+@keyframes draw-arc {
+  from {
+    stroke-dashoffset: var(--arc-len);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.arc-draw {
+  stroke-dasharray: var(--arc-len);
+  animation: draw-arc 700ms var(--ease-draw) both;
+}
+
+@keyframes bezel-shimmer {
+  from {
+    background-position: -200px 0;
+  }
+  to {
+    background-position: 200px 0;
+  }
+}
+.shimmer {
+  background: linear-gradient(90deg, var(--color-bezel) 0, var(--color-dial) 50%, var(--color-bezel) 100%);
+  background-size: 400px 100%;
+  animation: bezel-shimmer 1.4s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-    scroll-behavior: auto !important;
+  .arc-draw,
+  .shimmer {
+    animation: none;
   }
 }

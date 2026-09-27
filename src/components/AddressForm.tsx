@@ -18,26 +18,33 @@ export function AddressForm({ initial = "" }: { initial?: string }) {
         setTouched(true);
         if (valid) router.push(`/w/${value.trim()}`);
       }}
-      className="w-full max-w-xl"
+      className="w-full"
     >
-      <div className="flex gap-2">
+      <label htmlFor="wallet" className="label block mb-2">
+        Time a wallet
+      </label>
+      <div className="flex flex-col sm:flex-row gap-2">
         <input
+          id="wallet"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="0x… Hyperliquid wallet address"
-          className="num flex-1 bg-bg-raised border border-line rounded-sm px-3 py-2.5 text-sm outline-none focus:border-amber placeholder:text-fg-faint"
+          placeholder="0x Hyperliquid address"
+          spellCheck={false}
+          autoComplete="off"
+          className="fig flex-none sm:flex-1 min-w-0 h-11 bg-dial border border-ink-3 rounded-[var(--radius-control)] px-3 text-[14px] text-ink placeholder:text-ink-3 transition-[border-color] duration-150 focus:border-ink"
           aria-invalid={touched && !valid}
+          aria-describedby={touched && !valid ? "wallet-error" : undefined}
         />
         <button
           type="submit"
-          className="bg-amber text-bg font-medium text-sm px-4 py-2.5 rounded-sm hover:brightness-110 transition-[filter] shrink-0"
+          className="h-11 px-5 bg-ink text-paper font-medium text-[15px] rounded-[var(--radius-control)] whitespace-nowrap transition-[background-color] duration-150 hover:bg-ink-2"
         >
-          Open the window
+          Start the clock
         </button>
       </div>
       {touched && !valid ? (
-        <p className="mt-1.5 text-xs text-red" role="alert">
-          Enter a valid 0x wallet address (42 hex characters).
+        <p id="wallet-error" className="mt-2 text-[13px] text-late" role="alert">
+          That is not a wallet address. It should be 0x followed by 40 hex characters.
         </p>
       ) : null}
     </form>

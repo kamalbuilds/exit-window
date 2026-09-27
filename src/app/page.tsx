@@ -1,51 +1,48 @@
 "use client";
 
 import { AddressForm } from "@/components/AddressForm";
-import { FeedStrip, HeroClock, type FeedItem } from "@/components/FeedStrip";
-import { LeaderList } from "@/components/LeaderList";
+import { type FeedItem, isExit } from "@/components/feed";
+import { LapList } from "@/components/home/LapList";
+import { LiveDial } from "@/components/home/LiveDial";
+import { TimingTower } from "@/components/home/TimingTower";
 import { usePoll } from "@/components/usePoll";
 
 export default function Home() {
-  const { data: feed, loading, error, refresh } = usePoll<FeedItem[]>("/api/feed", 60_000);
+  const feed = usePoll<FeedItem[]>("/api/feed", 60_000);
+  const exits = (feed.data ?? []).filter(isExit);
 
   return (
-    <div className="flex-1 flex flex-col items-center">
-      <div className="w-full max-w-3xl px-6 py-10 flex flex-col gap-12">
-        <header className="flex items-center justify-between">
-          <span className="text-[11px] uppercase tracking-[0.2em] text-fg-faint">Exit Window</span>
-          <span className="text-[11px] uppercase tracking-[0.2em] text-fg-faint num">Hyperliquid · Nansen</span>
-        </header>
-
-        <section className="flex flex-col gap-5">
+    <main className="mx-auto w-full max-w-[1320px] px-4 sm:px-8 flex-1">
+      <section className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-x-12 gap-y-10 pt-10 lg:pt-14 pb-14">
+        <div className="lg:col-span-7 order-2 lg:order-1">
+          <LiveDial exit={exits[0] ?? null} loading={feed.loading} />
+        </div>
+        <div className="lg:col-span-5 order-1 lg:order-2 flex flex-col gap-8">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-medium leading-tight tracking-tight">
-              Copy the exit, not the entry.
-            </h1>
-            <p className="mt-2 text-fg-dim max-w-lg">
-              Paste a Hyperliquid wallet. See how long you had after it started exiting, and what
-              copying it would have cost you at your own reaction speed.
+            <h1 className="display text-[clamp(40px,6vw,68px)]">Copy the exit, not the entry.</h1>
+            <p className="mt-4 text-[18px] text-ink-2 max-w-[46ch]">
+              Every copy trader gets the entry late. The damage is done on the way out. Exit Window measures how many
+              minutes a wallet leaves you after it starts selling, what copying it cost at your delay, and follows it live.
             </p>
           </div>
           <AddressForm />
-          <HeroClock feed={feed} />
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-sm uppercase tracking-widest text-fg-faint">Smart Money exiting right now</h2>
+          <div>
+            <div className="flex items-baseline justify-between mb-2">
+              <h2 className="label">Smart Money exiting now</h2>
+              <span className="text-[12px] text-ink-3">Nansen labels, last 24h</span>
+            </div>
+            <LapList exits={exits} loading={feed.loading} error={feed.error} onRetry={feed.refresh} />
           </div>
-          <FeedStrip feed={feed} loading={loading} error={error} onRetry={refresh} />
-        </section>
+        </div>
+      </section>
 
-        <section className="flex flex-col gap-3">
-          <h2 className="text-sm uppercase tracking-widest text-fg-faint">Top wallets, 30 days</h2>
-          <LeaderList />
-        </section>
-
-        <footer className="text-[11px] text-fg-faint pt-4 border-t border-line">
-          Every number above comes from the Nansen API and Hyperliquid&apos;s public candles, live.
-        </footer>
-      </div>
-    </div>
+      <section className="border-t border-ink pt-8 pb-16">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+          <h2 className="display text-[28px]">The timing tower</h2>
+          <p className="text-[14px] text-ink-3">Top Hyperliquid wallets by 30-day PnL. Open one to see how fast it gets out.</p>
+        </div>
+        <TimingTower />
+      </section>
+    </main>
   );
 }
