@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cache:seed": "node scripts/cache-seed.mjs",
+    "calls:report": "node scripts/calls-report.mjs"
   },
   "dependencies": {
     "motion": "^13.4.4",

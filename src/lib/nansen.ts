@@ -1,7 +1,7 @@
 // Server-only typed client for the Nansen API, with a two-layer cache (memory + disk) so
 // development and the deployed demo never pay Nansen credits twice for the same request.
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Direction, Fill, LeaderRow, OpenPosition } from "./types";
 
@@ -121,6 +121,59 @@ export function currentNetworkCallCount(): number {
 }
 
 // ---------------------------------------------------------------------------
+// Append-only call log: one JSON line per real network call, so a judge can see the Nansen
+// API was actually hit and how it behaved. Never the apikey, never a signature.
+// ---------------------------------------------------------------------------
+
+function callLogPath(): string {
+  if (process.env.VERCEL) return "/tmp/nansen-calls.jsonl";
+  return path.join(process.cwd(), "data", "nansen-calls.jsonl");
+}
+
+interface CallLogEntry {
+  ts: string;
+  endpoint: string;
+  method: "GET" | "POST";
+  requestSummary: Record<string, unknown>;
+  status: number;
+  latencyMs: number;
+  rows: number | null;
+  rateLimitRemaining: number | null;
+  cache: "miss";
+  error?: string;
+}
+
+/** Allowlist, not blocklist, so a new field on a trading body (a future signature, a nonce)
+ * is excluded by default rather than needing to be remembered to redact. */
+function summarizeRequest(body: Json, query?: Record<string, string>): Record<string, unknown> {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const q = query ?? {};
+  const out: Record<string, unknown> = {};
+  const address = b.address ?? b.wallet_address ?? q.wallet_address ?? q.address;
+  if (typeof address === "string") out.address = address;
+  if (typeof b.coin === "string") out.coin = b.coin;
+  if (b.date && typeof b.date === "object") out.date = b.date;
+  if (typeof b.lookback_hours === "number") out.lookbackHours = b.lookback_hours;
+  return out;
+}
+
+function rowsOf(json: Json): number | null {
+  if (Array.isArray(json)) return json.length;
+  const data = (json as { data?: unknown })?.data;
+  return Array.isArray(data) ? data.length : null;
+}
+
+async function logCall(entry: Omit<CallLogEntry, "ts" | "cache">): Promise<void> {
+  try {
+    await mkdir(path.dirname(callLogPath()), { recursive: true });
+    const line: CallLogEntry = { ts: new Date().toISOString(), cache: "miss", ...entry };
+    await appendFile(callLogPath(), `${JSON.stringify(line)}\n`);
+  } catch {
+    // ponytail: best-effort append-only log; a failure here must never break a real request.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Raw HTTP: auth header, 429/5xx backoff (max 3 retries).
 // ---------------------------------------------------------------------------
 
@@ -133,7 +186,19 @@ interface RequestOptions {
   retries?: number;
 }
 
-async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Promise<Json> {
+interface RawFetchResult {
+  json: Json;
+  status: number;
+  rateLimitRemaining: number | null;
+}
+
+function rateLimitRemainingOf(headers: Headers): number | null {
+  const h = headers.get("RateLimit-Remaining") ?? headers.get("X-RateLimit-Remaining");
+  const n = h ? Number(h) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Promise<RawFetchResult> {
   const key = process.env.NANSEN_API_KEY;
   if (!key) {
     throw new NansenAuthError(
@@ -175,7 +240,7 @@ async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Pro
       throw new Error(`Nansen ${endpoint} ${res.status}: ${text}`);
     }
 
-    return res.json();
+    return { json: await res.json(), status: res.status, rateLimitRemaining: rateLimitRemainingOf(res.headers) };
   }
   throw lastError;
 }
@@ -219,16 +284,36 @@ async function nansenCall<T>(
   let promise = inflight.get(key);
   if (!promise) {
     promise = (async (): Promise<CacheRecord<T>> => {
+      const startedAt = Date.now();
       try {
         const raw = await rawFetch(endpoint, body, opts);
         bump(ledger.network, endpoint);
-        const rec: CacheRecord<T> = { data: parse(raw), fetchedAt: Date.now(), stale: false };
+        void logCall({
+          endpoint,
+          method: opts.method ?? "POST",
+          requestSummary: summarizeRequest(body, opts.query),
+          status: raw.status,
+          latencyMs: Date.now() - startedAt,
+          rows: rowsOf(raw.json),
+          rateLimitRemaining: raw.rateLimitRemaining,
+        });
+        const rec: CacheRecord<T> = { data: parse(raw.json), fetchedAt: Date.now(), stale: false };
         if (ttl !== null) {
           memCache.set(key, rec);
           void writeDisk(hash, rec);
         }
         return rec;
       } catch (err) {
+        void logCall({
+          endpoint,
+          method: opts.method ?? "POST",
+          requestSummary: summarizeRequest(body, opts.query),
+          status: 0,
+          latencyMs: Date.now() - startedAt,
+          rows: null,
+          rateLimitRemaining: null,
+          error: err instanceof Error ? err.message : String(err),
+        });
         const stale =
           memCache.get(key) ??
           (await readJson(path.join(cacheDir(), `${hash}.json`))) ??
