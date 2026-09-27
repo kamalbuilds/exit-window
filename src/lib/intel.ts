@@ -354,7 +354,7 @@ export function buildSmartAlertRequest(params: {
   return {
     name: `Exit Window: SM ${watchOutflow ? "outflow" : "inflow"} on ${coin}`,
     type: "sm-token-flows",
-    timeWindow: "15m",
+    timeWindow: "10m",
     channels: [{ type: "telegram", data: { chatId } }],
     data: {
       chains: [tokenChain],
