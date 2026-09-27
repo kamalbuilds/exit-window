@@ -60,6 +60,10 @@ export function latencyTax(
     )
     .map(({ ep, candles }) => ({ ep, candles, window: measureWindow(ep, candles ?? [], 1, 1440) }));
 
+  // No episode with a full observed entry+exit means there is nothing to backtest: a row of
+  // 0.0 tax at every latency reads as "copying this wallet is free," which is false, not empty.
+  if (eligible.length === 0) return [];
+
   return latenciesSec.map((latencySec) => {
     let copierSum = 0;
     let taxSum = 0;

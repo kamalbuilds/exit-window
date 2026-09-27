@@ -88,6 +88,8 @@ export interface WalletReport {
   episodes: Episode[];
   openPositions: OpenPosition[];
   nansenCalls: number; // Nansen API calls this report cost
+  backtestEligible: number; // episodes with a full observed entry+exit, used in the latency backtest
+  backtestNote: string | null; // one plain sentence on why the backtest is empty or thin, else null
 }
 
 export interface LeaderRow {

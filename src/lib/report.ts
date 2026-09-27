@@ -61,6 +61,21 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+/** One plain sentence on why the latency backtest is empty or thin (needs 3+ eligible episodes,
+ * see buildVerdict), or null when there's enough to trust the numbers. */
+function backtestNote(episodes: Episode[], eligibleCount: number, lookbackDays: number): string | null {
+  if (eligibleCount >= 3) return null;
+  if (episodes.length === 0) return "No closed positions found in this lookback window to backtest.";
+  if (eligibleCount === 0 && episodes.every((e) => !e.observedOpen)) {
+    const n = episodes.length;
+    return `All ${n} position${n === 1 ? "" : "s"} were already open when the ${lookbackDays}-day lookback began, so their entries can't be replayed.`;
+  }
+  if (eligibleCount === 0) {
+    return "No round-trip positions with both an observed entry and an exit in this lookback window.";
+  }
+  return `Only ${eligibleCount} round-trip position${eligibleCount === 1 ? "" : "s"} fully observed in this lookback window; the backtest needs at least 3 for a verdict.`;
+}
+
 function classifyExitStyle(episodes: Episode[]): WalletReport["exitStyle"] {
   const closed = episodes.filter((e) => e.closedAt !== null && e.exits.length > 0);
   if (closed.length === 0) return "unknown";
@@ -143,6 +158,8 @@ export async function buildReport(address: string, options: BuildReportOptions =
     episodes,
     openPositions: positions.data,
     nansenCalls: networkCallsSince(callsBefore),
+    backtestEligible: eligible.length,
+    backtestNote: backtestNote(episodes, eligible.length, lookbackDays),
   };
 
   reportCache.set(cacheKey, { report, cachedAt: Date.now() });

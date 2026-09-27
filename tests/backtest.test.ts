@@ -33,10 +33,17 @@ describe("latencyTax", () => {
     expect(results[0].taxPct).toBeCloseTo(costFrac, 8);
   });
 
-  it("excludes unobserved-open episodes from the backtest", () => {
+  it("returns no rows when no episode is eligible, instead of rows of 0.0 tax", () => {
     const unobserved: Episode = { ...closedLongEpisode(), observedOpen: false, walletReturnPct: null };
     const results = latencyTax([unobserved], [null], [0], { feeBps: 0, slippageBps: 0 });
-    expect(results[0].copierReturnPct).toBe(0);
-    expect(results[0].taxPct).toBe(0);
+    expect(results).toEqual([]);
+  });
+
+  it("excludes unobserved-open episodes from the backtest aggregate when mixed with eligible ones", () => {
+    const eligible = closedLongEpisode();
+    const unobserved: Episode = { ...closedLongEpisode(), observedOpen: false, walletReturnPct: null };
+    const results = latencyTax([eligible, unobserved], [null, null], [0], { feeBps: 0, slippageBps: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0].copierReturnPct).toBeCloseTo(0.2, 8);
   });
 });
