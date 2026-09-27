@@ -131,6 +131,8 @@ export interface WalletReport {
   nansenCalls: number; // Nansen API calls this report cost
   backtestEligible: number; // episodes with a full observed entry+exit, used in the latency backtest
   backtestNote: string | null; // one plain sentence on why the backtest is empty or thin, else null
+  degraded: boolean; // true when fills, pnl or positions served cached/fallback data instead of a fresh Nansen call
+  dataAsOf: number | null; // newest fetchedAt among any degraded component's source; null when not degraded
 }
 
 export interface LeaderRow {

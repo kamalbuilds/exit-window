@@ -325,6 +325,8 @@ describe("readExitDna", () => {
       nansenCalls: 0,
       backtestEligible: 0,
       backtestNote: null,
+      degraded: false,
+      dataAsOf: null,
     };
   }
 

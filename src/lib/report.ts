@@ -1,12 +1,21 @@
 // Assembles a WalletReport: fetch fills + pnl + positions, build episodes, measure exit windows,
 // backtest the latency tax, and settle on a verdict. This is the one call the UI needs per wallet.
-import { attachMarkPrices, fetchCandles, intervalForAge, type Candle } from "./hyperliquid";
-import { fetchPerpTrades, fetchPerpPositions, fetchPnlSummary, currentNetworkCallCount, networkCallsSince } from "./nansen";
+import { attachMarkPrices, fetchCandles, fetchClearinghouseState, intervalForAge, type Candle } from "./hyperliquid";
+import {
+  fetchPerpTrades,
+  fetchPerpPositions,
+  fetchPnlSummary,
+  findAnyAgeCache,
+  NansenCreditsError,
+  currentNetworkCallCount,
+  networkCallsSince,
+  type PnlSummary,
+} from "./nansen";
 import { loadFills, saveFills, mergeFills } from "./fills-store";
 import { fillsToEpisodes } from "./positions";
 import { measureWindow } from "./exitwindow";
 import { latencyTax, buildVerdict } from "./backtest";
-import type { AlarmReplay, AlarmReplayEpisode, Episode, ExitDna, ExitWindow, Fill, WalletReport } from "./types";
+import type { AlarmReplay, AlarmReplayEpisode, Episode, ExitDna, ExitWindow, Fill, OpenPosition, WalletReport } from "./types";
 import { LATENCIES_SEC } from "./types";
 
 const MAX_PAGES = 5;
@@ -44,32 +53,103 @@ async function fetchRange(address: string, from: string, to: string): Promise<Fi
   return fills;
 }
 
+export interface FillsResult {
+  fills: Fill[];
+  degraded: boolean; // true when a top-up call was skipped because credits are exhausted
+  dataAsOf: number | null; // stored.lastSeen (ms) when degraded and something was stored, else null
+}
+
 /** Buys only what the persisted store hasn't already got: [lastSeen, to] going forward (usually
  * 1 page, since most of a wallet's history hasn't changed since the last report), plus
- * [from, earliestSeen] on the rare call that asks further back than anything stored. */
-async function fetchAllFills(address: string, from: string, to: string): Promise<Fill[]> {
+ * [from, earliestSeen] on the rare call that asks further back than anything stored. When credits
+ * are exhausted, a top-up call throws NansenCreditsError; this degrades to the stored fills as-is
+ * rather than failing the whole report, and - critically - only claims the coverage it actually
+ * fetched, so a later healthy call still knows to top up the range this one couldn't reach. */
+async function fetchAllFills(address: string, from: string, to: string): Promise<FillsResult> {
   const stored = await loadFills(address);
   const fetched: Fill[] = [];
+  let degraded = false;
+  let newEarliestSeen = stored?.earliestSeen ?? from;
+  let newLastSeen = stored?.lastSeen ?? to;
+
+  async function extend(rangeFrom: string, rangeTo: string): Promise<boolean> {
+    try {
+      fetched.push(...(await fetchRange(address, rangeFrom, rangeTo)));
+      return true;
+    } catch (err) {
+      if (!(err instanceof NansenCreditsError)) throw err;
+      degraded = true;
+      return false;
+    }
+  }
 
   if (!stored) {
-    fetched.push(...(await fetchRange(address, from, to)));
+    await extend(from, to);
   } else {
-    if (Date.parse(from) < Date.parse(stored.earliestSeen)) {
-      fetched.push(...(await fetchRange(address, from, stored.earliestSeen)));
+    if (Date.parse(from) < Date.parse(stored.earliestSeen) && (await extend(from, stored.earliestSeen))) {
+      newEarliestSeen = from;
     }
-    if (Date.parse(to) > Date.parse(stored.lastSeen)) {
-      fetched.push(...(await fetchRange(address, stored.lastSeen, to)));
+    if (Date.parse(to) > Date.parse(stored.lastSeen) && (await extend(stored.lastSeen, to))) {
+      newLastSeen = to;
     }
   }
 
   const merged = mergeFills(stored?.fills ?? [], fetched);
-  const earliestSeen = stored && Date.parse(stored.earliestSeen) < Date.parse(from) ? stored.earliestSeen : from;
-  const lastSeen = stored && Date.parse(stored.lastSeen) > Date.parse(to) ? stored.lastSeen : to;
-  await saveFills(address, { earliestSeen, lastSeen, fills: merged });
+  // A degraded read must never persist a coverage claim it didn't back with a real fetch - that
+  // would make a later, healthy call believe a gap was already checked and skip it forever.
+  if (stored || !degraded) {
+    await saveFills(address, { earliestSeen: newEarliestSeen, lastSeen: newLastSeen, fills: merged });
+  }
 
   const fromMs = Date.parse(from);
   const toMs = Date.parse(to);
-  return merged.filter((f) => f.t >= fromMs && f.t <= toMs);
+  return {
+    fills: merged.filter((f) => f.t >= fromMs && f.t <= toMs),
+    degraded,
+    dataAsOf: degraded && stored ? Date.parse(stored.lastSeen) : null,
+  };
+}
+
+/** profiler/perp-pnl-summary is date-scoped, so a credits-exhausted call for the exact [from,to]
+ * bucket almost never has an exact-key cache hit. Falls back to the newest cached pnl summary for
+ * this SAME address under any prior date range (reconstructed from the call log), and to null
+ * (no pnl shown) when nothing has ever been cached for it. */
+async function fetchPnlDegradeAware(
+  address: string,
+  from: string,
+  to: string,
+): Promise<{ realizedPnlUsd: number | null; degraded: boolean; dataAsOf: number | null }> {
+  try {
+    const r = await fetchPnlSummary(address, from, to);
+    return { realizedPnlUsd: r.data.realizedPnlUsd, degraded: r.stale, dataAsOf: r.stale ? r.fetchedAt : null };
+  } catch (err) {
+    if (!(err instanceof NansenCreditsError)) throw err;
+    const fallback = await findAnyAgeCache<PnlSummary>(
+      "profiler/perp-pnl-summary",
+      (s) => typeof s.address === "string" && s.address.toLowerCase() === address.toLowerCase(),
+      (s) => (typeof s.address === "string" && s.date ? { address: s.address, date: s.date } : null),
+    );
+    if (fallback) return { realizedPnlUsd: fallback.data.realizedPnlUsd, degraded: true, dataAsOf: fallback.fetchedAt };
+    return { realizedPnlUsd: null, degraded: true, dataAsOf: null };
+  }
+}
+
+/** profiler/perp-positions has no date component in its cache key, so nansenCall's own exact-key
+ * stale-while-error fallback already serves any prior cached response for this address regardless
+ * of age; NansenCreditsError only reaches here when truly nothing has ever been cached for it.
+ * In that case, fall back to Hyperliquid's own public clearinghouseState: free, live, no credits
+ * involved, just missing markPx (attachMarkPrices fills that from the same allMids cache either way). */
+async function fetchPositionsDegradeAware(
+  address: string,
+): Promise<{ positions: OpenPosition[]; degraded: boolean; dataAsOf: number | null }> {
+  try {
+    const r = await fetchPerpPositions(address);
+    return { positions: r.data, degraded: r.stale, dataAsOf: r.stale ? r.fetchedAt : null };
+  } catch (err) {
+    if (!(err instanceof NansenCreditsError)) throw err;
+    const positions = await fetchClearinghouseState(address);
+    return { positions, degraded: true, dataAsOf: Date.now() };
+  }
 }
 
 /** Candle range covering everything the exit-window measurement and the latency backtest need:
@@ -248,11 +328,12 @@ export async function buildReport(address: string, options: BuildReportOptions =
   const from = new Date(nowMs - lookbackDays * 86_400_000).toISOString();
   const to = new Date(nowMs).toISOString();
 
-  const [fills, pnlSummary, positions] = await Promise.all([
+  const [fillsResult, pnlResult, positionsResult] = await Promise.all([
     fetchAllFills(address, from, to),
-    fetchPnlSummary(address, from, to),
-    fetchPerpPositions(address),
+    fetchPnlDegradeAware(address, from, to),
+    fetchPositionsDegradeAware(address),
   ]);
+  const { fills } = fillsResult;
 
   const allEpisodes = fillsToEpisodes(fills);
   // Most recent maxEpisodes: candle-fetch cost scales with episode count, and the UI cares about
@@ -280,9 +361,15 @@ export async function buildReport(address: string, options: BuildReportOptions =
     meanWalletReturnPct,
   });
 
-  const openPositions = await attachMarkPrices(positions.data);
+  const openPositions = await attachMarkPrices(positionsResult.positions);
   const unrealizedPnlUsd = openPositions.reduce((sum, p) => sum + (p.unrealizedPnlUsd ?? 0), 0);
   const medianWindowMin = median(windows.map((w) => w.windowMin).filter((m): m is number => m !== null));
+
+  const degraded = fillsResult.degraded || pnlResult.degraded || positionsResult.degraded;
+  const dataAsOf = degraded
+    ? Math.max(...[fillsResult.dataAsOf, pnlResult.dataAsOf, positionsResult.dataAsOf].filter((v): v is number => v !== null), 0) ||
+      null
+    : null;
 
   const report: WalletReport = {
     address,
@@ -296,7 +383,7 @@ export async function buildReport(address: string, options: BuildReportOptions =
     latency,
     maxSafeLatencySec,
     verdict,
-    realizedPnlUsd: pnlSummary.data.realizedPnlUsd,
+    realizedPnlUsd: pnlResult.realizedPnlUsd,
     unrealizedPnlUsd,
     episodes,
     exitDna: computeExitDna(episodes),
@@ -305,6 +392,8 @@ export async function buildReport(address: string, options: BuildReportOptions =
     nansenCalls: networkCallsSince(callsBefore),
     backtestEligible: eligible.length,
     backtestNote: backtestNote(episodes, eligible.length, lookbackDays),
+    degraded,
+    dataAsOf,
   };
 
   reportCache.set(cacheKey, { report, cachedAt: Date.now() });

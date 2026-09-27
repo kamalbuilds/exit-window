@@ -3,7 +3,7 @@
 // No wallet reports are built here - the UI opens /api/wallet/[addr] per companion on demand,
 // which is already cached.
 import { attachMarkPrices, fetchClearinghouseState } from "./hyperliquid";
-import { fetchAddressLabels, fetchTgmPerpPositions, type RawCompanion } from "./nansen";
+import { fetchAddressLabels, fetchTgmPerpPositions, findAnyAgeCache, NansenCreditsError, type RawCompanion } from "./nansen";
 import type { Companion, OverlapRow } from "./types";
 
 const MAX_COMPANIONS = 5;
@@ -35,9 +35,48 @@ async function resolveDisplayLabel(c: RawCompanion, lookupBudget: { left: number
   if (!isJunkLabel(c.label)) return c.label as string;
   if (lookupBudget.left <= 0) return fallbackDisplayLabel(c.cohort);
   lookupBudget.left -= 1;
-  const { data: labels } = await fetchAddressLabels(c.address);
-  const preferred = labels.find((l) => DISPLAY_KEYWORDS.some((kw) => l.label.includes(kw)));
-  return preferred?.label ?? fallbackDisplayLabel(c.cohort);
+  try {
+    const { data: labels } = await fetchAddressLabels(c.address);
+    const preferred = labels.find((l) => DISPLAY_KEYWORDS.some((kw) => l.label.includes(kw)));
+    return preferred?.label ?? fallbackDisplayLabel(c.cohort);
+  } catch (err) {
+    if (!(err instanceof NansenCreditsError)) throw err;
+    return fallbackDisplayLabel(c.cohort);
+  }
+}
+
+/** tgm/perp-positions has no address in its key, just (coin, label_type, side) - point-in-time,
+ * not date-scoped - so nansenCall's own exact-key stale fallback already covers "any age" for a
+ * request shape it's seen before. When even that has nothing (this exact coin/side/labelType
+ * combo was never cached), fall back to the newest cached response for that same combo under
+ * any request the call log remembers; and if there's truly none, an empty companion list rather
+ * than failing the whole overlap row. */
+async function fetchCompanionsDegradeAware(
+  coin: string,
+  side: "Long" | "Short",
+  labelType: "smart_money" | "whale",
+): Promise<RawCompanion[]> {
+  try {
+    const { data } = await fetchTgmPerpPositions(coin, side, labelType, FETCH_COMPANIONS);
+    return data;
+  } catch (err) {
+    if (!(err instanceof NansenCreditsError)) throw err;
+    const fallback = await findAnyAgeCache<RawCompanion[]>(
+      "tgm/perp-positions",
+      (s) => s.tokenSymbol === coin && s.side === side && s.labelType === labelType,
+      (s) =>
+        typeof s.tokenSymbol === "string" && typeof s.side === "string" && typeof s.labelType === "string"
+          ? {
+              token_symbol: s.tokenSymbol,
+              label_type: s.labelType,
+              pagination: { page: 1, per_page: FETCH_COMPANIONS },
+              filters: { side: s.side },
+              order_by: [{ field: "position_value_usd", direction: "DESC" }],
+            }
+          : null,
+    );
+    return fallback?.data ?? [];
+  }
 }
 
 export async function buildOverlap(address: string): Promise<OverlapRow[]> {
@@ -49,11 +88,11 @@ export async function buildOverlap(address: string): Promise<OverlapRow[]> {
   return Promise.all(
     withMarks.map(async (p): Promise<OverlapRow> => {
       const side = p.direction === "long" ? "Long" : "Short";
-      const { data: smartMoney } = await fetchTgmPerpPositions(p.coin, side, "smart_money", FETCH_COMPANIONS);
+      const smartMoney = await fetchCompanionsDegradeAware(p.coin, side, "smart_money");
       let companions = smartMoney.filter((c) => c.address.toLowerCase() !== lower);
 
       if (companions.length < MIN_SMART_MONEY) {
-        const { data: whales } = await fetchTgmPerpPositions(p.coin, side, "whale", FETCH_COMPANIONS);
+        const whales = await fetchCompanionsDegradeAware(p.coin, side, "whale");
         const seen = new Set(companions.map((c) => c.address.toLowerCase()));
         for (const w of whales) {
           const wLower = w.address.toLowerCase();

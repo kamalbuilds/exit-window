@@ -137,8 +137,12 @@ export function currentNetworkCallCount(): number {
 // API was actually hit and how it behaved. Never the apikey, never a signature.
 // ---------------------------------------------------------------------------
 
+// Same hazard as testCacheDir above, same fix: a fixed VITEST path would let one test's logged
+// calls leak into another test's (or another `vitest run` invocation's) any-age log scan.
+const testLogPath = process.env.VITEST ? path.join("/tmp", `nansen-calls-test-${randomUUID()}.jsonl`) : null;
+
 function callLogPath(): string {
-  if (process.env.VITEST) return "/tmp/nansen-calls-test.jsonl";
+  if (testLogPath) return testLogPath;
   if (process.env.VERCEL) return "/tmp/nansen-calls.jsonl";
   return path.join(process.cwd(), "data", "nansen-calls.jsonl");
 }
@@ -167,6 +171,12 @@ function summarizeRequest(body: Json, query?: Record<string, string>): Record<st
   if (typeof address === "string") out.address = address;
   if (typeof b.coin === "string") out.coin = b.coin;
   if (typeof b.token_symbol === "string") out.tokenSymbol = b.token_symbol;
+  if (typeof b.label_type === "string") out.labelType = b.label_type;
+  const filters = b.filters;
+  if (filters && typeof filters === "object") {
+    const side = (filters as Record<string, unknown>).side;
+    if (typeof side === "string") out.side = side;
+  }
   if (b.date && typeof b.date === "object") out.date = b.date;
   if (typeof b.lookback_hours === "number") out.lookbackHours = b.lookback_hours;
   const pagination = b.pagination;
@@ -487,6 +497,34 @@ export async function nansenCall<T>(
   }
   const rec = (await promise) as CacheRecord<T>;
   return { data: rec.data, fetchedAt: rec.fetchedAt, stale: !!rec.stale };
+}
+
+/** Second-level fallback for when nansenCall's own exact-key stale cache also has nothing (the
+ * request's date range never matched a prior call): scans the append-only call log for the
+ * newest successful call on `endpoint` whose logged fields satisfy `matches`, reconstructs that
+ * call's exact cache key from what the log captured, and reads whatever's still on disk or in
+ * the seed for it - ignoring TTL entirely. Real, possibly-old data beats a 503. Returns null when
+ * no logged call matches, or the log didn't capture enough fields to rebuild the body (a request
+ * shape summarizeRequest started allowlisting after that call was made). Callers opt into this
+ * explicitly; nansenCall itself never does this scan, so unrelated endpoints are unaffected. */
+export async function findAnyAgeCache<T>(
+  endpoint: string,
+  matches: (summary: Record<string, unknown>) => boolean,
+  rebuildBody: (summary: Record<string, unknown>) => Json | null,
+): Promise<CachedResult<T> | null> {
+  const log = await readCallLog();
+  const candidates = log
+    .filter((e) => e.endpoint === endpoint && e.cache === "miss" && !e.error && matches(e.requestSummary))
+    .sort((a, b) => b.ts.localeCompare(a.ts)); // newest first
+  for (const entry of candidates) {
+    const body = rebuildBody(entry.requestSummary);
+    if (body === null) continue;
+    const hash = hashKey(cacheKey(endpoint, body));
+    const rec =
+      (await readJson(path.join(cacheDir(), `${hash}.json`))) ?? (await readJson(path.join(SEED_DIR, `${hash}.json`)));
+    if (rec) return { data: rec.data as T, fetchedAt: rec.fetchedAt, stale: true };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
