@@ -3,7 +3,7 @@
 // node:crypto/node:fs storage code, which can't bundle for the browser. alarms.ts re-exports
 // everything here, so server code keeps importing from "@/lib/alarms" as before.
 
-export type AlarmTrigger = "any" | "consensus" | "largest" | "high_risk";
+export type AlarmTrigger = "any" | "consensus" | "largest" | "high_risk" | "near_liquidation";
 export type AlarmAction = "alert" | "cut25" | "cut50" | "close";
 
 /** The scenario builder's rule: WHEN a watched wallet reduces (trigger, gated by a minimum reduce
@@ -14,6 +14,7 @@ export interface AlarmRule {
   trigger: AlarmTrigger;
   minReducePct: number; // 0..100
   consensusN?: number; // only meaningful for trigger "consensus"; default 2
+  liqWithinPct?: number; // only meaningful for trigger "near_liquidation"; default 5
   action: AlarmAction;
   askAgent: boolean;
 }
@@ -29,6 +30,10 @@ function ruleWhenClause(rule: AlarmRule, watchedCount: number): string {
       return `When the largest holder you watch reduces${qualifier}`;
     case "high_risk":
       return `When a High exit-risk wallet you watch reduces${qualifier}`;
+    case "near_liquidation":
+      // Not a reduce at all - a forced-exit risk on the largest watched holder's own liquidation
+      // price, so the minReducePct qualifier (which only ever describes a reduce size) never applies.
+      return `When price comes within ${rule.liqWithinPct ?? 5}% of the largest watched holder's liquidation`;
   }
 }
 

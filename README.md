@@ -9,7 +9,7 @@ Exit Window is for Hyperliquid traders who already hold a position that Smart Mo
 3. shows how each of those wallets exits: how often a first reduce becomes a full exit, how fast, and how many minutes a holder had before price moved 1% against them,
 4. arms a Telegram alarm that messages you the moment one of them starts selling, with an optional protection rule that cuts your own position through Nansen's perp trading API.
 
-Built for the Nansen Meridian Buildathon. Nansen is the data layer for every decision in the product; Hyperliquid's public API only supplies price candles and a free 30-second position tick for the alarm.
+Built for the Nansen Meridian Buildathon. Nansen is the data layer for every decision in the product; Hyperliquid's public API only supplies price candles, live liquidation prices, and a free 30-second position tick for the alarm.
 
 - Live: https://exit-window.fly.dev
 - Telegram bot: [@nansen_meridian_bot](https://t.me/nansen_meridian_bot)
@@ -32,6 +32,8 @@ Nansen asked the same question from the other side: *"the more interesting one i
 **Your trades.** Paste your Hyperliquid address. Every position, the Smart Money on the same side, how far above them you bought, and a live chart of your entry against theirs with every Smart Money buy and sell marked.
 
 ![Your trades: your entry against the Smart Money in your trade](docs/screenshots/your-trades.png)
+
+**Forced exits.** Exit DNA times the exits a wallet chooses. A liquidation is the exit it does not choose, and it sells straight into yours. For every Smart Money holder Nansen puts on your side, Exit Window reads its live liquidation price from Hyperliquid and draws it on your chart with the wallet's avatar. A ladder orders those liquidations against your own, for example: "$2.24M of Smart Money is force-sold before you are liquidated at $2.47" (LIT long, address `0xf21d…3b2d`, read 2026-09-27 18:20 UTC). Holders that Hyperliquid shows have already left since the Nansen snapshot are marked Already out. The alarm builder has a matching scenario: "When price comes within 5% of the largest watched holder's liquidation, message me", checked every tick against Hyperliquid with no Nansen credits spent.
 
 **Exiting now.** Live Smart Money reduces on Hyperliquid, exit pressure by coin, and a dial timing the latest exit.
 

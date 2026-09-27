@@ -8,6 +8,11 @@ const TRIGGER_OPTIONS: { id: AlarmTrigger; title: string; hint: string }[] = [
   { id: "consensus", title: "2 or more reduce within 1 hour", hint: "Consensus: waits for agreement before it fires." },
   { id: "largest", title: "The largest holder reduces", hint: "Only your biggest watched position matters." },
   { id: "high_risk", title: "A High exit-risk wallet reduces", hint: "Only wallets rated High exit risk." },
+  {
+    id: "near_liquidation",
+    title: "Price nears the largest holder's liquidation",
+    hint: "A forced exit dumps into your exit - this times that, not a reduce.",
+  },
 ];
 
 const MIN_REDUCE_OPTIONS: { pct: number; text: string }[] = [
@@ -71,6 +76,7 @@ export function ScenarioPanel({
   arming: boolean;
 }) {
   const titleId = useId();
+  const liqPctId = useId();
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -126,6 +132,31 @@ export function ScenarioPanel({
             <Card key={o.id} active={rule.trigger === o.id} onClick={() => onChange({ ...rule, trigger: o.id })} title={o.title} hint={o.hint} />
           ))}
         </div>
+
+        {rule.trigger === "near_liquidation" && (
+          <div className="mt-4">
+            <label htmlFor={liqPctId} className="label">
+              Within
+            </label>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                id={liqPctId}
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                inputMode="decimal"
+                value={rule.liqWithinPct ?? 5}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  onChange({ ...rule, liqWithinPct: Number.isFinite(n) && n > 0 ? n : 5 });
+                }}
+                className="fig h-8 w-20 rounded-md border border-rule bg-bezel px-2 text-[13px] text-ink"
+              />
+              <span className="text-[13px] text-ink-2">% of the liquidation price</span>
+            </div>
+          </div>
+        )}
 
         <p className="label mt-4">Minimum reduce</p>
         <div className="mt-2 flex items-center gap-1 bg-bezel rounded-lg p-1 w-fit">

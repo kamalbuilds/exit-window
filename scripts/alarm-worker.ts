@@ -14,6 +14,8 @@ import {
   formatAlarmMessage,
   formatConsensusMessage,
   formatDropMessage,
+  formatNearLiquidationMessage,
+  formatNearLiquidationStoppedMessage,
   formatOnboardingMessage,
   formatProtectionLine,
   formatTestMessage,
@@ -21,25 +23,30 @@ import {
   friendlyNansenError,
   loadStore,
   markHeld,
+  nearLiquidationDecision,
   ownerStillHolds,
   pruneRecent,
   randomCode,
   readExitDna,
   saveStore,
+  setNearLiquidationState,
   setSmartAlertId,
   shortAddr,
   shouldDropForClose,
   shouldFire,
   shouldNotify,
   smartAlertIdsForChat,
+  stopNearLiquidationWatch,
   unbindChat,
+  usdValueOf,
   whyCacheKey,
   type RecentReduce,
   type SmartAlertOnboardingInput,
   type Watch,
 } from "@/lib/alarms";
+import { adverseDistancePct } from "@/lib/forced";
 import { diffPositions } from "@/lib/follow";
-import { fetchAllMids, fetchClearinghouseState } from "@/lib/hyperliquid";
+import { dexPrefix, fetchAllMids, fetchClearinghouseState, fetchMidsForDex, fetchPositionOnCoin } from "@/lib/hyperliquid";
 import { createSmartAlert, deleteSmartAlert } from "@/lib/intel";
 import { mirrorChange } from "@/lib/mirror";
 import { logCall } from "@/lib/nansen";
@@ -356,6 +363,121 @@ async function tick(): Promise<void> {
             console.error("sendMessage failed:", err instanceof Error ? err.message : err);
           });
       }
+    }
+  }
+
+  // near_liquidation: a forced-exit risk on the largest watched holder's own liquidation price,
+  // not a reduce - so it is checked independently of the diffPositions loop above, every tick, for
+  // every alarm carrying that trigger. Hyperliquid-only (fetchPositionOnCoin, fetchMidsForDex):
+  // zero Nansen calls, matching the credits-exhausted constraint this trigger was built under.
+  for (const record of active) {
+    const rule = record.rule;
+    if (!rule || rule.trigger !== "near_liquidation" || record.chatId === null) continue;
+    const withinPct = rule.liqWithinPct ?? 5;
+
+    const byCoin = new Map<string, Watch[]>();
+    for (const watch of record.watches) {
+      if (watch.nearLiqStopped) continue;
+      const group = byCoin.get(watch.coin) ?? [];
+      group.push(watch);
+      byCoin.set(watch.coin, group);
+    }
+
+    for (const [coin, watchesForCoin] of byCoin) {
+      const [positionEntries, mids] = await Promise.all([
+        Promise.all(watchesForCoin.map(async (w) => [w, await fetchPositionOnCoin(w.leader, coin).catch(() => null)] as const)),
+        fetchMidsForDex(dexPrefix(coin)).catch(() => ({}) as Record<string, number>),
+      ]);
+      const mid: number | null = mids[coin] ?? null;
+
+      // Ranking uses only the live position each leader currently holds - positionValueUsd is
+      // never persisted on a Watch (see AlarmRequestWatch's bind-time comment), so "largest" is
+      // recomputed fresh every tick rather than read off stale bind-time data.
+      let best: { watch: Watch; position: OpenPosition } | null = null;
+      let bestValue = -Infinity;
+      for (const [watch, position] of positionEntries) {
+        if (!position) {
+          // The leader no longer holds this coin at all. Only worth a message once, and only for
+          // a watch this alarm had actually been checking (nearLiqState set means it was, at some
+          // earlier tick, this coin's largest live holder).
+          if (watch.nearLiqState !== undefined) {
+            store = stopNearLiquidationWatch(store, record.code, watch.leader, coin);
+            await sendMessage(record.chatId, formatNearLiquidationStoppedMessage(watch.label, watch.leader, coin)).catch((err) => {
+              errors++;
+              console.error("sendMessage failed:", err instanceof Error ? err.message : err);
+            });
+          }
+          continue;
+        }
+        const value = usdValueOf(position, mid);
+        if (value > bestValue) {
+          bestValue = value;
+          best = { watch, position };
+        }
+      }
+      if (!best) continue;
+
+      const { watch, position } = best;
+      if (position.liquidationPx === null || position.liquidationPx <= 0) {
+        console.log(`near_liquidation: no liquidationPx for leader=${watch.leader} coin=${coin}, skipping`);
+        continue;
+      }
+      if (mid === null) {
+        console.log(`near_liquidation: no live mid for coin=${coin}, skipping`);
+        continue;
+      }
+
+      const distancePct = adverseDistancePct(watch.direction, mid, position.liquidationPx);
+      const decision = nearLiquidationDecision(watch.nearLiqState, distancePct, withinPct);
+      store = setNearLiquidationState(store, record.code, watch.leader, coin, decision.state);
+      if (!decision.fire) continue;
+
+      let mirrorResult = null;
+      const reducePct = effectiveReducePct(rule, watch);
+      // Only an explicit cut action moves money here. record.mirror copies a leader's own reduce, and
+      // nearing liquidation is not a reduce, so mirror mode alone must never close the position.
+      if (reducePct !== null) {
+        const fraction = reducePct / 100;
+        mirrorResult = await mirrorChange(
+          {
+            coin,
+            direction: watch.direction,
+            kind: "reduce",
+            fromSize: position.size,
+            toSize: position.size * (1 - fraction),
+            reducedFraction: fraction,
+            at: Date.now(),
+          },
+          record.owner,
+        ).catch((err) => {
+          errors++;
+          console.error("mirrorChange failed:", err instanceof Error ? err.message : err);
+          return null;
+        });
+      }
+      const protectionLine = mirrorResult ? formatProtectionLine(mirrorResult) : null;
+
+      const ownerSize = ownerPosByAddr.get(record.owner)?.find((p) => p.coin === coin)?.size ?? 0;
+      const message = formatNearLiquidationMessage({
+        leaderLabel: watch.label,
+        leaderAddress: watch.leader,
+        coin,
+        direction: watch.direction,
+        markPx: mid,
+        distancePct,
+        liquidationPx: position.liquidationPx,
+        positionValueUsd: usdValueOf(position, mid),
+        ownerSize,
+        appUrl: APP_URL,
+        protectionLine,
+      });
+
+      await sendMessage(record.chatId, message)
+        .then(() => messagesSent++)
+        .catch((err) => {
+          errors++;
+          console.error("sendMessage failed:", err instanceof Error ? err.message : err);
+        });
     }
   }
 

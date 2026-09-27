@@ -25,6 +25,10 @@ export interface Watch {
   // the coin yet at bind time
   largest?: boolean; // set once, at bind time, on the watch whose leader held the largest
   // positionValueUsd among this alarm's watches - what trigger "largest" fires on
+  nearLiqState?: NearLiquidationState; // hysteresis state for trigger "near_liquidation", present
+  // only once this watch has been evaluated as the coin's largest live holder at least once
+  nearLiqStopped?: boolean; // true once the leader no longer held the coin and that was already
+  // told to the chat once - trigger "near_liquidation" never checks this watch again after
 }
 
 export interface AlarmRecord {
@@ -106,7 +110,14 @@ export function parseAlarmRule(input: unknown): AlarmRule | null {
   const r = input as Record<string, unknown>;
 
   const trigger = r.trigger;
-  if (trigger !== "any" && trigger !== "consensus" && trigger !== "largest" && trigger !== "high_risk") return null;
+  if (
+    trigger !== "any" &&
+    trigger !== "consensus" &&
+    trigger !== "largest" &&
+    trigger !== "high_risk" &&
+    trigger !== "near_liquidation"
+  )
+    return null;
 
   const minReducePct = r.minReducePct;
   if (typeof minReducePct !== "number" || !Number.isFinite(minReducePct) || minReducePct < 0 || minReducePct > 100) return null;
@@ -123,7 +134,20 @@ export function parseAlarmRule(input: unknown): AlarmRule | null {
     consensusN = r.consensusN;
   }
 
-  return { trigger, minReducePct, action, askAgent, ...(consensusN !== undefined ? { consensusN } : {}) };
+  let liqWithinPct: number | undefined;
+  if (r.liqWithinPct !== undefined) {
+    if (typeof r.liqWithinPct !== "number" || !Number.isFinite(r.liqWithinPct) || r.liqWithinPct <= 0 || r.liqWithinPct > 100) return null;
+    liqWithinPct = r.liqWithinPct;
+  }
+
+  return {
+    trigger,
+    minReducePct,
+    action,
+    askAgent,
+    ...(consensusN !== undefined ? { consensusN } : {}),
+    ...(liqWithinPct !== undefined ? { liqWithinPct } : {}),
+  };
 }
 
 /** What reducedFraction the mirror/protect path should use for this fire, or null to not protect
@@ -163,6 +187,10 @@ export function shouldNotify(
       return !!watch.largest;
     case "high_risk":
       return ctx.leaderExitRiskHigh;
+    case "near_liquidation":
+      // Never fires off a reduce - it's evaluated independently in the worker's tick loop against
+      // live liquidation distance (see nearLiquidationDecision), not against this watch's own reduce.
+      return false;
   }
 }
 
@@ -308,6 +336,112 @@ export function ownerStillHolds(ownerPositions: OpenPosition[], coin: string): b
 }
 
 // ---------------------------------------------------------------------------
+// Near liquidation: a forced-exit risk on the largest watched holder's own liquidation price -
+// not a reduce at all, so it never goes through shouldFire/shouldNotify. Evaluated live, every
+// tick, in the worker (which owns the Hyperliquid reads); this stays pure and unit-testable.
+// ---------------------------------------------------------------------------
+
+export type NearLiquidationState = "idle" | "armed";
+
+export interface NearLiquidationDecision {
+  fire: boolean;
+  state: NearLiquidationState;
+}
+
+/** Fire/hysteresis decision for one leader+coin pair. Fires once when distancePct closes to at or
+ * under withinPct (idle -> armed). While armed, never fires again - even on a tick where distance
+ * dips further - until distancePct recovers back above withinPct * 1.5, at which point it quietly
+ * returns to idle (no fire on the recovery tick itself) so the next close approach can fire again. */
+export function nearLiquidationDecision(
+  prevState: NearLiquidationState | undefined,
+  distancePct: number,
+  withinPct: number,
+): NearLiquidationDecision {
+  const state = prevState ?? "idle";
+  if (state === "armed") {
+    return distancePct > withinPct * 1.5 ? { fire: false, state: "idle" } : { fire: false, state: "armed" };
+  }
+  return distancePct <= withinPct ? { fire: true, state: "armed" } : { fire: false, state: "idle" };
+}
+
+/** Persists the hysteresis state for one leader+coin pair - matched by both, since one coin can
+ * have several watched leaders and only the one currently picked as the largest live holder ever
+ * gets state written. */
+export function setNearLiquidationState(
+  store: AlarmStore,
+  code: string,
+  leader: string,
+  coin: string,
+  state: NearLiquidationState,
+): AlarmStore {
+  const record = store[code];
+  if (!record) return store;
+  const watches = record.watches.map((w) => (w.leader === leader && w.coin === coin ? { ...w, nearLiqState: state } : w));
+  return { ...store, [code]: { ...record, watches } };
+}
+
+/** Marks a leader+coin watch as stopped once its leader no longer holds the coin at all - the
+ * worker checks this before ever calling fetchPositionOnCoin for it again. */
+export function stopNearLiquidationWatch(store: AlarmStore, code: string, leader: string, coin: string): AlarmStore {
+  const record = store[code];
+  if (!record) return store;
+  const watches = record.watches.map((w) => (w.leader === leader && w.coin === coin ? { ...w, nearLiqStopped: true } : w));
+  return { ...store, [code]: { ...record, watches } };
+}
+
+export interface NearLiquidationMessageInput {
+  leaderLabel: string | null;
+  leaderAddress: string;
+  coin: string;
+  direction: Direction;
+  markPx: number;
+  distancePct: number;
+  liquidationPx: number;
+  positionValueUsd: number;
+  ownerSize: number;
+  appUrl: string;
+  protectionLine?: string | null;
+}
+
+/** Same structured shape as formatAlarmMessage (who, the concrete numbers, your own position or
+ * not held, then protection/report): "{label} ({short addr}) on {COIN} {long/short}: price {mid}
+ * is {d}% from its liquidation at {liqPx}. If it is liquidated, {positionValueUsd} is force-sold
+ * into your exit.", then whether the owner holds this coin right now, then the usual
+ * protection/report lines every other fire message ends with. */
+export function formatNearLiquidationMessage(input: NearLiquidationMessageInput): string {
+  const {
+    leaderLabel,
+    leaderAddress,
+    coin,
+    direction,
+    markPx,
+    distancePct,
+    liquidationPx,
+    positionValueUsd,
+    ownerSize,
+    appUrl,
+    protectionLine,
+  } = input;
+  const who = leaderLabel ? `${leaderLabel} (${shortAddr(leaderAddress)})` : shortAddr(leaderAddress);
+  const size = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  const lines = [
+    `${who} on ${coin} ${direction}: price ${size(markPx)} is ${distancePct.toFixed(1)}% from its liquidation at ${size(liquidationPx)}.`,
+    `If it is liquidated, $${Math.round(positionValueUsd).toLocaleString("en-US")} is force-sold into your exit.`,
+    ownerSize > 0 ? `You hold ${size(ownerSize)} ${coin}.` : `You don't hold ${coin} right now.`,
+  ];
+  if (protectionLine) lines.push(protectionLine);
+  lines.push(`Report: ${appUrl}/w/${leaderAddress}`);
+  return lines.join("\n");
+}
+
+/** Sent once when the leader being tracked for near_liquidation no longer holds the coin at all -
+ * plain statement, not the ambiguous "no longer hold" (mirrors formatDropMessage's own wording). */
+export function formatNearLiquidationStoppedMessage(leaderLabel: string | null, leaderAddress: string, coin: string): string {
+  const who = leaderLabel ? `${leaderLabel} (${shortAddr(leaderAddress)})` : shortAddr(leaderAddress);
+  return `${who} no longer holds ${coin}. Stopped checking it for liquidation risk.`;
+}
+
+// ---------------------------------------------------------------------------
 // Consensus: more than one watched leader reducing the same coin+direction within an hour.
 // ---------------------------------------------------------------------------
 
@@ -414,7 +548,9 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function usdValueOf(position: OpenPosition, markPx: number | null): number {
+/** Exported so the worker's near_liquidation ranking (largest live holder per coin) reuses the
+ * exact same USD-value formula as the onboarding message, rather than recomputing it. */
+export function usdValueOf(position: OpenPosition, markPx: number | null): number {
   return position.size * (markPx ?? position.entryPx);
 }
 
