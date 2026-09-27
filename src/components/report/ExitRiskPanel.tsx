@@ -1,4 +1,11 @@
-import type { ExitRisk, FollowLateSummary } from "@/lib/types";
+import type { ExitDna, ExitRisk, FollowLateSummary } from "@/lib/types";
+
+const STYLE: Record<string, string> = {
+  nuclear: "Nuclear: dumps the whole position at once",
+  scaler: "Scaler: sells in several steps",
+  trimmer: "Trimmer: trims and keeps holding",
+  mixed: "Mixed: sometimes scales out, sometimes dumps",
+};
 
 const DELAY_LABEL: Record<number, string> = { 60: "1 min", 300: "5 min", 900: "15 min", 3600: "1 hour" };
 const LEVEL: Record<ExitRisk["level"], { text: string; chip: string; ring: string }> = {
@@ -10,7 +17,7 @@ const LEVEL: Record<ExitRisk["level"], { text: string; chip: string; ring: strin
 
 /** Holder risk: will this wallet's first reduce turn into a full exit, and what did following it
  * late cost a holder on each past exit. Positive pct = the holder gave back that much. */
-export function ExitRiskPanel({ risk, followLate }: { risk?: ExitRisk | null; followLate?: FollowLateSummary | null }) {
+export function ExitRiskPanel({ risk, followLate, dna }: { risk?: ExitRisk | null; followLate?: FollowLateSummary | null; dna?: ExitDna | null }) {
   if (!risk && !followLate) return null;
   const lv = LEVEL[risk?.level ?? "unknown"];
   const rows = followLate?.perDelay ?? [];
@@ -24,6 +31,7 @@ export function ExitRiskPanel({ risk, followLate }: { risk?: ExitRisk | null; fo
       </div>
       <div className="grid md:grid-cols-2 gap-x-8 gap-y-5 p-4">
         <div>
+          {dna && <p className="mb-2"><span className="chip chip-mute">{STYLE[dna.style] ?? dna.style}</span></p>}
           {risk && <p className="text-[15px] text-ink leading-relaxed">{risk.sentence}</p>}
           {risk && risk.sample > 0 && (
             <dl className="mt-4 grid grid-cols-3 gap-4">
@@ -47,15 +55,16 @@ export function ExitRiskPanel({ risk, followLate }: { risk?: ExitRisk | null; fo
             <p className="label mb-2">If you follow its exit late, on average</p>
             <ul className="flex flex-col gap-2">
               {rows.map((r) => {
-                const cost = r.meanPct > 0;
+                const flat = Math.abs(r.meanPct) < 0.05;
+                const cost = !flat && r.meanPct > 0;
                 return (
                   <li key={r.delaySec} className="grid grid-cols-[4.5rem_minmax(0,1fr)_6.5rem] items-center gap-3">
                     <span className="text-[13px] text-ink-2">{DELAY_LABEL[r.delaySec] ?? `${r.delaySec}s`}</span>
                     <span className="h-1.5 rounded-full bg-rule overflow-hidden">
-                      <span className={`block h-full rounded-full ${cost ? "bg-late" : "bg-lume"}`} style={{ width: `${(Math.abs(r.meanPct) / maxAbs) * 100}%` }} />
+                      <span className={`block h-full rounded-full ${flat ? "bg-ink-3" : cost ? "bg-late" : "bg-lume"}`} style={{ width: `${flat ? 2 : (Math.abs(r.meanPct) / maxAbs) * 100}%` }} />
                     </span>
-                    <span className={`fig text-[13px] text-right ${cost ? "text-late" : "text-lume"}`}>
-                      {cost ? `-${r.meanPct.toFixed(1)}%` : `+${Math.abs(r.meanPct).toFixed(1)}%`}
+                    <span className={`fig text-[13px] text-right ${flat ? "text-ink-3" : cost ? "text-late" : "text-lume"}`}>
+                      {flat ? "flat" : cost ? `-${r.meanPct.toFixed(1)}%` : `+${Math.abs(r.meanPct).toFixed(1)}%`}
                     </span>
                   </li>
                 );

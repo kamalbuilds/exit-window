@@ -11,7 +11,7 @@ import { formatAgo, formatDate, formatMinutes, formatPct, formatUsd, shortAddr }
 import { usePoll } from "@/components/usePoll";
 import { ExitStrip, StripAxis } from "@/components/report/ExitStrip";
 import { ExitRiskPanel } from "@/components/report/ExitRiskPanel";
-import { FollowRail } from "@/components/report/FollowRail";
+import { WalletAlarmRail } from "@/components/report/WalletAlarmRail";
 import { LatencyLadder } from "@/components/report/LatencyLadder";
 import { Positions } from "@/components/report/Positions";
 import { DELAYS, inTime } from "@/components/timescale";
@@ -136,9 +136,8 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
 
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-6 items-start">
         <div className="lg:col-span-8 flex flex-col gap-6 min-w-0">
-          <ExitRiskPanel risk={report.exitRisk} followLate={report.followLateSummary} />
-          {report.exitDna && <ExitDnaBlock dna={report.exitDna} />}
-          {report.alarmReplay && <AlarmReplayBlock ar={report.alarmReplay} />}
+          <ExitRiskPanel risk={report.exitRisk} followLate={report.followLateSummary} dna={report.exitDna} />
+          {report.alarmReplay && (report.alarmReplay.savedVsHoldingPct >= 0.5 || report.alarmReplay.savedVsWaitingPct >= 0.5) && <AlarmReplayBlock ar={report.alarmReplay} />}
 
           {windows.length > 0 && (
             <div>
@@ -156,7 +155,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
                 <div className="px-4 pt-3 pb-1">
                   <StripAxis />
                 </div>
-                <p className="px-4 pb-2 text-[12px] text-ink-3">Green: how long a holder had after this wallet's first reduce, before price moved 1% against them. Ticks under each rail are copier delays, green if they got out in time.</p>
+                <p className="px-4 pb-2 text-[12px] text-ink-3">Green: how long a holder had after this wallet&apos;s first reduce, before price moved 1% against them. Ticks under each rail are copier delays, green if they got out in time.</p>
                 <ol>
                   {windows.map((w) => (
                     <ExitStrip key={`${w.coin}-${w.firstReduceAt}`} w={w} openedBefore={before(w)} />
@@ -194,7 +193,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
           </section>
 
           <div className="lg:sticky lg:top-20">
-            <FollowRail address={address} medianWindowMin={m} />
+            <WalletAlarmRail leader={address} positions={report.openPositions} medianWindowMin={m} />
           </div>
         </div>
       </div>
@@ -218,29 +217,6 @@ function Stat({ term, value, tone, title, div }: { term: string; value: string; 
 }
 
 /** How this wallet tends to leave a position, distilled from its own closed episodes. */
-function ExitDnaBlock({ dna }: { dna: ExitDna }) {
-  const clipsLabel = Number.isInteger(dna.medianClips) ? String(dna.medianClips) : dna.medianClips.toFixed(1);
-  return (
-    <section className="panel overflow-hidden">
-      <PanelTitle meta={`${dna.sample} closed trade${dna.sample === 1 ? "" : "s"}`}>Exit DNA</PanelTitle>
-      <div className="px-4 py-4">
-        <p className="flex flex-wrap items-center gap-2">
-          <span className="chip chip-mute capitalize">{dna.style}</span>
-          <span className="text-[13px] text-ink-3">{STYLE_GLOSS[dna.style]}</span>
-        </p>
-        <p className="mt-2.5 text-[14px] text-ink-2 max-w-[64ch]">
-          First reduce became a full exit <span className="fig text-ink">{Math.round(dna.fullExitAfterFirstReducePct)}%</span> of the time
-          {dna.firstReduceToFlatMedianMin != null ? (
-            <>
-              , usually within <span className="fig text-ink">{formatMinutes(dna.firstReduceToFlatMedianMin)}</span>
-            </>
-          ) : null}
-          , in <span className="fig text-ink">{clipsLabel}</span> clip{dna.medianClips === 1 ? "" : "s"}.
-        </p>
-      </div>
-    </section>
-  );
-}
 
 /** Backtests the alarm itself against this wallet's own closed episodes. */
 function AlarmReplayBlock({ ar }: { ar: AlarmReplay }) {
