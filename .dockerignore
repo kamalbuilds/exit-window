@@ -1,0 +1,9 @@
+node_modules
+.next
+.cache
+.env
+.env.*
+!.env.example
+progress/raw
+.git
+data/alarms.json
