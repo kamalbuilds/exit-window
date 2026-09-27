@@ -610,8 +610,12 @@ function renderBubbleLayer(
   const totalWidth = host.clientWidth;
   for (const w of wallets) {
     if (!w.entryPx || w.entryPx <= 0) continue;
-    const y = series.priceToCoordinate(w.entryPx);
-    if (y === null) continue;
+    const rawY = series.priceToCoordinate(w.entryPx);
+    if (rawY === null) continue;
+    // Keep pins inside the plot: an entry above or below the visible range sits at the edge, dimmed.
+    const plotH = host.clientHeight - chart.timeScale().height();
+    const y = Math.min(Math.max(rawY, 9), plotH - 9);
+    const offView = y !== rawY;
     const x = totalWidth - axisWidth / 2;
     const label = walletLabel(w.label, w.address);
 
@@ -628,6 +632,7 @@ function renderBubbleLayer(
     el.style.height = "14px";
     el.style.transform = "translate(-50%, -50%)";
     el.style.background = avatarBackground(w.address);
+    if (offView) el.style.opacity = "0.55";
     el.style.boxShadow = `0 0 0 2px ${THEME.entryRing}`;
     host.appendChild(el);
   }
