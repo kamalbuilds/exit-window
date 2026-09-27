@@ -33,6 +33,6 @@ Clock was read at 10:19 and 10:51 only; times between are approximate ordering, 
 ## Build log
 
 - 11:22 Product gate PASS in .progress (5 evidence items; direct alternative Copin Single Backtesting, no copier-latency model). Nansen key live: perp-leaderboard 200.
-- 11:25 Live probes of perp-trades/positions/SM feed: side = position side, action Open/Add/Reduce/Close, start_position signed. Recorded in docs/BUILD-SPEC.md.
-- 11:30 Two builders launched: engine+API (src/lib, src/app/api) and UI (pages, components). Persistent Nansen cache required by user: per-endpoint TTL, disk + committed seed, stale-while-error, network vs cache-hit ledger.
-- 11:40 jevgrep-laya on Whale Street ("how are Nansen perp orders prepared, signed, executed"): 168 laya calls, 25 s, top hits METHODOLOGY.md, Dockerfile, pnpm-lock.yaml; missed trading.ts and mirror/hl.ts. Plain grep for `perp/execute` found all 3 files instantly. Prior art passed to engine: Nansen /perp/execute rejects approveAgent; agent + builder-fee approvals are main-wallet steps on api.hyperliquid.xyz/exchange.
+- 11:21 Live probes of perp-trades/positions/SM feed: side = position side, action Open/Add/Reduce/Close, start_position signed. Recorded in docs/BUILD-SPEC.md.
+- 11:23 Two builders launched: engine+API (src/lib, src/app/api) and UI (pages, components). Persistent Nansen cache required by user: per-endpoint TTL, disk + committed seed, stale-while-error, network vs cache-hit ledger.
+- 11:25 jevgrep-laya on Whale Street ("how are Nansen perp orders prepared, signed, executed"): 168 laya calls, 25 s, top hits METHODOLOGY.md, Dockerfile, pnpm-lock.yaml; missed trading.ts and mirror/hl.ts. Plain grep for `perp/execute` found all 3 files instantly. Prior art passed to engine: Nansen /perp/execute rejects approveAgent; agent + builder-fee approvals are main-wallet steps on api.hyperliquid.xyz/exchange.
