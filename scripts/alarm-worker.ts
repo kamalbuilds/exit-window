@@ -25,6 +25,7 @@ import {
   readExitDna,
   saveStore,
   setSmartAlertId,
+  shortAddr,
   shouldDropForClose,
   shouldFire,
   smartAlertIdsForChat,
@@ -438,14 +439,12 @@ async function pollTelegram(): Promise<void> {
             try {
               const created = await createSmartAlert({ code: bound.record.code, coin: w.coin, direction: w.direction });
               store = setSmartAlertId(store, bound.record.code, w.coin, created.id);
+              console.log(`smart-alert created: code=${bound.record.code} coin=${w.coin} direction=${w.direction} id=${created.id}`);
               return { coin: w.coin, direction: w.direction, status: "created", detail: created.id };
             } catch (err) {
-              return {
-                coin: w.coin,
-                direction: w.direction,
-                status: "skipped",
-                detail: err instanceof Error ? err.message : String(err),
-              };
+              const reason = err instanceof Error ? err.message : String(err);
+              console.error(`smart-alert skipped: code=${bound.record.code} coin=${w.coin} direction=${w.direction} reason=${reason}`);
+              return { coin: w.coin, direction: w.direction, status: "skipped", detail: reason };
             }
           }),
         );
@@ -486,7 +485,7 @@ async function pollTelegram(): Promise<void> {
       } else if (text.startsWith("/list")) {
         const mine = alarmsForChat(store, chat);
         const lines = mine.flatMap((r) =>
-          r.watches.map((w) => `${w.leader.slice(0, 6)}…${w.leader.slice(-4)} - ${w.coin} (${w.direction})`),
+          r.watches.map((w) => `${w.label || shortAddr(w.leader)} - ${w.coin} (${w.direction})`),
         );
         await sendMessage(chat, lines.length ? lines.join("\n") : "No active watches.").catch(() => {});
       } else if (text.startsWith("/test")) {

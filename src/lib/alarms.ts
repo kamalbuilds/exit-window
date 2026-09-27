@@ -169,7 +169,7 @@ function fmtMin(min: number | null): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-function shortAddr(address: string): string {
+export function shortAddr(address: string): string {
   return address.length <= 10 ? address : `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
