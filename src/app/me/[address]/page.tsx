@@ -8,6 +8,13 @@ import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
 import { formatMinutes, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
 
+interface Cohort {
+  available: boolean;
+  smartTraderLongUsd?: number;
+  smartTraderShortUsd?: number;
+  oneLiner?: string;
+}
+
 interface Pressure {
   holders: number;
   reducedLast1h: number;
@@ -278,12 +285,31 @@ function TradeHeadline({ row }: { row: OverlapRow }) {
           <>You entered {row.coin} at the same price as the Smart Money in it.</>
         )}
       </p>
-      {p && (
-        <p className={`text-[14px] ${p.pressure === "high" ? "text-late" : "text-ink-2"}`}>
-          <span className="label mr-2">Exit pressure {p.pressure}</span>
-          {p.read}
-        </p>
-      )}
+      <div className="flex flex-col gap-1 md:items-end">
+        {p && (
+          <p className={`text-[14px] ${p.pressure === "high" ? "text-late" : "text-ink-2"}`}>
+            <span className="label mr-2">Exit pressure {p.pressure}</span>
+            {p.read}
+          </p>
+        )}
+        <CohortBar coin={row.coin} />
+      </div>
+    </div>
+  );
+}
+
+/** Smart Trader long vs short USD on this coin (Nansen tgm/position-intelligence). */
+function CohortBar({ coin }: { coin: string }) {
+  const { data } = usePoll<Cohort>(`/api/intel/cohort/${encodeURIComponent(coin)}`, 0);
+  if (!data?.available || !data.smartTraderLongUsd || data.smartTraderShortUsd === undefined) return null;
+  const total = data.smartTraderLongUsd + data.smartTraderShortUsd;
+  const longPct = total > 0 ? (data.smartTraderLongUsd / total) * 100 : 50;
+  return (
+    <div className="w-full md:w-72">
+      <div className="flex h-1.5 bg-late" role="img" aria-label={data.oneLiner ?? "Smart Trader positioning"}>
+        <span className="h-full bg-lume" style={{ width: `${longPct}%` }} />
+      </div>
+      <p className="mt-1 text-[12px] text-ink-3">{data.oneLiner}</p>
     </div>
   );
 }

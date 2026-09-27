@@ -81,7 +81,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
       <section className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-x-12 gap-y-8 pt-6 pb-12 border-b border-ink">
         <div className="lg:col-span-7 flex flex-col justify-center">
           <p className="fig text-[13px] text-ink-3 break-all">{address}</p>
-          {report.label && <p className="text-[15px] text-ink-2 mt-1">{report.label}</p>}
+          <ClusterLine address={address} />
           <h1 className={`display text-[clamp(36px,5vw,60px)] mt-5 ${v.tone === "late" ? "text-late" : "text-ink"}`}>{v.lead}</h1>
           <dl className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-5 border-t border-ink pt-5">
             <Stat term="Median window" value={m === null ? "none closed" : formatMinutes(m)} />
@@ -168,4 +168,40 @@ function Stat({ term, value, tone }: { term: string; value: string; tone?: "lume
 function LoadingDial() {
   const [t0] = useState(() => Date.now());
   return <Chronograph size={420} startedAt={t0} title="Building the report" />;
+}
+
+interface Cluster {
+  labels: string[];
+  siblings: { address: string; label: string | null; relation: string }[];
+}
+
+/** Nansen labels for this wallet and the wallets it is funded through. */
+function ClusterLine({ address }: { address: string }) {
+  const { data } = usePoll<Cluster>(`/api/intel/cluster/${address}`, 0);
+  if (!data) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-1">
+      {data.labels.length > 0 && (
+        <p className="flex flex-wrap gap-x-3 gap-y-1 text-[14px] text-ink-2">
+          {data.labels.map((l) => (
+            <span key={l} className="border-b border-rule">{l}</span>
+          ))}
+        </p>
+      )}
+      {data.siblings.length > 0 && (
+        <p className="text-[13px] text-ink-3">
+          Linked wallets, watched with it:{" "}
+          {data.siblings.slice(0, 3).map((s, i) => (
+            <span key={s.address}>
+              {i > 0 ? ", " : ""}
+              <Link href={`/w/${s.address}`} className="fig underline decoration-rule hover:decoration-ink">
+                {shortAddr(s.address)}
+              </Link>{" "}
+              ({s.relation.toLowerCase()})
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
+  );
 }
