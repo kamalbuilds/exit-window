@@ -65,8 +65,11 @@ export function dexPrefix(coin: string): string {
 }
 
 /** allMids changes every block; a 15s cache per dex keeps mark-price lookups (one per report,
- * one per position list) from hammering Hyperliquid's public endpoint on every request. */
-async function fetchMidsForDex(dex: string): Promise<Record<string, number>> {
+ * one per position list) from hammering Hyperliquid's public endpoint on every request. Exported
+ * so a single-coin caller (mirror.ts's mirrorChange, pricing one leader's coin at a time) can
+ * pair it with dexPrefix() directly instead of routing through attachMarkPrices' position-list
+ * shape for one coin. */
+export async function fetchMidsForDex(dex: string): Promise<Record<string, number>> {
   const cached = midsCache.get(dex);
   if (cached && Date.now() - cached.fetchedAt < MIDS_TTL_MS) return cached.data;
   const res = await fetch("https://api.hyperliquid.xyz/info", {

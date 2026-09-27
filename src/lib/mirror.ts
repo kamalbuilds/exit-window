@@ -10,8 +10,8 @@
 // this app. See progress/api-docs/trade_perp-trading.md#builder-fee.
 import { hexToSignature } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { fetchAllMids } from "./hyperliquid";
-import { executePerpAction, fetchBuilderFee, fetchFollowerPositions, preparePerpClose, type Eip712Payload } from "./nansen";
+import { dexPrefix, fetchClearinghouseState, fetchMidsForDex } from "./hyperliquid";
+import { executePerpAction, fetchBuilderFee, preparePerpClose, type Eip712Payload } from "./nansen";
 import type { Direction, OpenPosition, PositionChange } from "./types";
 
 const DEFAULT_MAX_USD = 100;
@@ -44,7 +44,10 @@ function stripDomainType(types: Eip712Payload["types"]): Eip712Payload["types"] 
 
 export async function mirrorChange(change: PositionChange, followerAddress: string | null): Promise<MirrorResult> {
   const cap = maxUsd();
-  const mids = await fetchAllMids();
+  // A builder-deployed HIP-3 coin ("xyz:CL", "io:NBIS") only prices through its own dex's
+  // allMids call - see hyperliquid.ts's attachMarkPrices for the same routing over a position
+  // list; this is the single-coin equivalent for one leader change at a time.
+  const mids = await fetchMidsForDex(dexPrefix(change.coin));
   const price = mids[change.coin] ?? 0;
 
   // Only reduce/close/flip changes have anything to mirror; open/add have reducedFraction 0.
@@ -69,8 +72,11 @@ export async function mirrorChange(change: PositionChange, followerAddress: stri
   let followerSizeBefore: number;
   let followerPosition: OpenPosition | null = null;
   if (followerAddress) {
-    const positions = await fetchFollowerPositions(followerAddress);
-    followerPosition = positions.data.find((p) => p.coin === change.coin) ?? null;
+    // Hyperliquid's own clearinghouseState, not Nansen's perp/positions: free, live, no credits,
+    // and (via hyperliquid.ts's dex fan-out) already sees a HIP-3 position that a main-dex-only
+    // call would miss entirely.
+    const positions = await fetchClearinghouseState(followerAddress);
+    followerPosition = positions.find((p) => p.coin === change.coin) ?? null;
     followerSizeBefore = followerPosition?.size ?? 0;
   } else {
     // ponytail: no real follower account in paper mode, so there is no real position to scale
@@ -137,6 +143,12 @@ export async function mirrorChange(change: PositionChange, followerAddress: stri
 
   // Closing a long is a sell; closing a short is a buy. Reduce-only, so this can never flip.
   const isBuy = change.direction === "short";
+  // change.coin is passed through as-is, e.g. "xyz:CL" for a HIP-3 coin: Nansen's perp/close
+  // docs (progress/api-docs/trade_perp-trading.md, and docs.nansen.ai's own doc-query answer)
+  // document `coin` only as "the perp asset/market symbol", with no separate HIP-3/builder-market
+  // id scheme - so the same dex-prefixed identifier Hyperliquid's own clearinghouseState/allMids
+  // use above is the only documented, consistent value to send. Unverified against a live
+  // /perp/close call (Nansen credits are exhausted; this path only runs in live mode).
   const prepared = await preparePerpClose(hlAddress, change.coin, sizeToClose, price, isBuy);
 
   const account = privateKeyToAccount(hlKey as `0x${string}`);
