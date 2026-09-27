@@ -50,7 +50,13 @@ export async function fetchCandles(
   }));
 }
 
+const MIDS_TTL_MS = 15_000;
+let midsCache: { data: Record<string, number>; fetchedAt: number } | null = null;
+
+/** allMids changes every block; a 15s cache keeps mark-price lookups (one per report, one per
+ * position list) from hammering Hyperliquid's public endpoint on every request. */
 export async function fetchAllMids(): Promise<Record<string, number>> {
+  if (midsCache && Date.now() - midsCache.fetchedAt < MIDS_TTL_MS) return midsCache.data;
   const res = await fetch("https://api.hyperliquid.xyz/info", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -60,5 +66,16 @@ export async function fetchAllMids(): Promise<Record<string, number>> {
   const raw = (await res.json()) as Record<string, string | number>;
   const out: Record<string, number> = {};
   for (const [k, v] of Object.entries(raw ?? {})) out[k] = Number(v);
+  midsCache = { data: out, fetchedAt: Date.now() };
   return out;
+}
+
+/** Fills OpenPosition.markPx from the live mid, leaving it null only for coins allMids doesn't
+ * carry (HIP-3 markets like "xyz:"/"io:" prefixes, or a delisted coin). */
+export async function attachMarkPrices<T extends { coin: string; markPx: number | null }>(
+  positions: T[],
+): Promise<T[]> {
+  if (positions.length === 0) return positions;
+  const mids = await fetchAllMids();
+  return positions.map((p) => ({ ...p, markPx: mids[p.coin] ?? null }));
 }

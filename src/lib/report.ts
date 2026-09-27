@@ -1,6 +1,6 @@
 // Assembles a WalletReport: fetch fills + pnl + positions, build episodes, measure exit windows,
 // backtest the latency tax, and settle on a verdict. This is the one call the UI needs per wallet.
-import { fetchCandles, intervalForAge, type Candle } from "./hyperliquid";
+import { attachMarkPrices, fetchCandles, intervalForAge, type Candle } from "./hyperliquid";
 import { fetchPerpTrades, fetchPerpPositions, fetchPnlSummary, currentNetworkCallCount, networkCallsSince } from "./nansen";
 import { fillsToEpisodes } from "./positions";
 import { measureWindow } from "./exitwindow";
@@ -138,7 +138,8 @@ export async function buildReport(address: string, options: BuildReportOptions =
     meanWalletReturnPct,
   });
 
-  const unrealizedPnlUsd = positions.data.reduce((sum, p) => sum + (p.unrealizedPnlUsd ?? 0), 0);
+  const openPositions = await attachMarkPrices(positions.data);
+  const unrealizedPnlUsd = openPositions.reduce((sum, p) => sum + (p.unrealizedPnlUsd ?? 0), 0);
   const medianWindowMin = median(windows.map((w) => w.windowMin).filter((m): m is number => m !== null));
 
   const report: WalletReport = {
@@ -156,7 +157,7 @@ export async function buildReport(address: string, options: BuildReportOptions =
     realizedPnlUsd: pnlSummary.data.realizedPnlUsd,
     unrealizedPnlUsd,
     episodes,
-    openPositions: positions.data,
+    openPositions,
     nansenCalls: networkCallsSince(callsBefore),
     backtestEligible: eligible.length,
     backtestNote: backtestNote(episodes, eligible.length, lookbackDays),
