@@ -99,7 +99,7 @@ Requirements: Node 22+ (tested on 24.9). No API key is needed to run the demo: t
 ```bash
 git clone https://github.com/kamalbuilds/exit-window
 cd exit-window
-npm install                 # about 10 s
+npm install
 cp .env.example .env        # optional: NANSEN_API_KEY, TELEGRAM_BOT_TOKEN
 npm run dev                 # site on http://localhost:3000, ready in a few seconds
 npm run alarms              # second terminal: Telegram alarm worker (needs TELEGRAM_BOT_TOKEN)
@@ -108,7 +108,7 @@ npm run sentinel            # third terminal, optional: live Smart Money exit fe
 
 Then open http://localhost:3000/me/0xea0027b6ea9b6d7d401b5266979cc3b3ca87a918, a Hyperliquid whale with 11 open positions (ETH, SOL, HYPE, PURR, LIT and others). Each position lists the Smart Money on the same side, the chart of your entry against theirs, and the Forced exits ladder. The top two holders of each position are timed one after another in the background; each takes 15 to 60 seconds on a cold start while their fills and candles load from Hyperliquid. Press **Arm exit alarm** to build a scenario and get the Telegram deep link.
 
-Measured on a fresh clone with no keys set (2026-09-27): `npm install` 10 s, dev server ready in 4 s, `/api/overlap` for the demo wallet 1.7 s, each holder report 16 to 65 s, `npm test` 254 passing.
+Measured on two fresh clones with no keys set (2026-09-27): clone to a working demo page in 30 s and 3 min 11 s, dev server ready in 4 s, `/api/overlap` for the demo wallet 1.7 s, each holder report 16 to 65 s, `npm test` 254 passing.
 
 Hyperliquid allows 1200 request weight per minute per IP. Every call goes through one limiter (`src/lib/hyperliquid.ts`), and each process takes its share from `HL_WEIGHT_PER_MIN` (default 400, so site, worker and sentinel together stay at 1200).
 
