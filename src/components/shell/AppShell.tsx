@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
-import { Bell, GithubLogo, ListChecks, MagnifyingGlass, Pulse, TelegramLogo, Crosshair, Wallet } from "@phosphor-icons/react";
+import { Bell, EnvelopeSimple, GithubLogo, ListChecks, MagnifyingGlass, Pulse, TelegramLogo, Crosshair, Wallet } from "@phosphor-icons/react";
 import { usePoll } from "../usePoll";
 
 const HEX = /^0x[a-fA-F0-9]{40}$/;
@@ -60,6 +60,7 @@ function Sidebar() {
     { href: last ? `/me/${last}` : "/me", label: "Your trades", icon: <Wallet size={18} />, active: path.startsWith("/me") },
     { href: "/wallets", label: "Top wallets", icon: <ListChecks size={18} />, active: path.startsWith("/wallets") || path.startsWith("/w/") },
     { href: "/calls", label: "Nansen calls", icon: <Bell size={18} />, active: path.startsWith("/calls") },
+    { href: "/waitlist", label: "Join the waitlist", icon: <EnvelopeSimple size={18} />, active: path.startsWith("/waitlist") },
   ];
   return (
     <aside className="hidden lg:flex flex-col w-60 shrink-0 border-r border-rule bg-dial sticky top-0 h-dvh">
