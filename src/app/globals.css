@@ -1,26 +1,66 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #0b0a08;
+  --bg-raised: #14120d;
+  --line: rgba(245, 241, 232, 0.12);
+  --line-strong: rgba(245, 241, 232, 0.22);
+  --fg: #f5f1e8;
+  --fg-dim: #a89f8c;
+  --fg-faint: #6b6455;
+  --amber: #f5a623;
+  --amber-dim: rgba(245, 166, 35, 0.16);
+  --red: #ff5a36;
+  --red-dim: rgba(255, 90, 54, 0.16);
+  --green: #5fa66b;
+  --green-dim: rgba(95, 166, 107, 0.14);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
+  --color-bg-raised: var(--bg-raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-dim: var(--fg-dim);
+  --color-fg-faint: var(--fg-faint);
+  --color-amber: var(--amber);
+  --color-amber-dim: var(--amber-dim);
+  --color-red: var(--red);
+  --color-red-dim: var(--red-dim);
+  --color-green: var(--green);
+  --color-green-dim: var(--green-dim);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--line);
+}
+
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.num {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
