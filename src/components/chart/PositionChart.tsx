@@ -63,6 +63,8 @@ export interface ChartWallet {
   cohort?: string;
   positionValueUsd?: number;
   entryPx?: number;
+  /** Live from Hyperliquid clearinghouseState; null/undefined = no liquidation price or unread. */
+  liquidationPx?: number | null;
 }
 
 interface Overlays {
@@ -71,6 +73,25 @@ interface Overlays {
   buys: boolean;
   sells: boolean;
   windows: boolean;
+  liqs: boolean;
+}
+
+/** Reads a DESIGN.md colour token from the live stylesheet; falls back to THEME's hardcoded hex
+ * (matches DESIGN.md too) when the token isn't there, e.g. in a test environment without CSS. */
+function cssVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+/** "#rrggbb" -> "rgba(r, g, b, alpha)"; the token values in globals.css are always plain hex. */
+function withAlpha(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  if (h.length !== 6) return hex;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 interface Props {
@@ -87,6 +108,8 @@ interface Props {
   hiddenWallets?: string[];
   /** The price-line label for the viewed position: "You" on /me, "This wallet" on /w. */
   entryLabel?: string;
+  /** The user's own liquidation price (OverlapRow.liquidationPx); drawn as a solid "You liq." line. */
+  youLiquidationPx?: number | null;
 }
 
 /** "You vs Smart Money": a live candlestick chart for one coin with the user's entry, the
@@ -102,9 +125,10 @@ export function PositionChart({
   wallets,
   hiddenWallets,
   entryLabel = "You",
+  youLiquidationPx,
 }: Props) {
   const [tf, setTf] = useState<Timeframe>("1d");
-  const [overlays, setOverlays] = useState<Overlays>({ youLine: true, smLine: true, buys: true, sells: true, windows: true });
+  const [overlays, setOverlays] = useState<Overlays>({ youLine: true, smLine: true, buys: true, sells: true, windows: true, liqs: true });
   const [minSize, setMinSize] = useState<MinSizeFilter>("any");
   const [localToggled, setLocalToggled] = useState<Set<string>>(() => new Set());
 
@@ -122,8 +146,16 @@ export function PositionChart({
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const youLineRef = useRef<IPriceLine | null>(null);
   const smLineRef = useRef<IPriceLine | null>(null);
+  const youLiqLineRef = useRef<IPriceLine | null>(null);
+  // One dashed price line per wallet with a live liquidation price, keyed by lowercased address.
+  const liqLinesRef = useRef<Map<string, IPriceLine>>(new Map());
   const bandsDataRef = useRef<{ candles: Candle[]; windows: WindowBand[] }>({ candles: [], windows: [] });
-  const bubbleDataRef = useRef<{ candles: Candle[]; fills: ChartMarker[]; wallets: ChartWallet[] }>({ candles: [], fills: [], wallets: [] });
+  const bubbleDataRef = useRef<{ candles: Candle[]; fills: ChartMarker[]; wallets: ChartWallet[]; liqWallets: ChartWallet[] }>({
+    candles: [],
+    fills: [],
+    wallets: [],
+    liqWallets: [],
+  });
   const fittedTfRef = useRef<Timeframe | null>(null);
   // Price lines do not take part in autoscale; the provider below reads these so both stay in view.
   const linesRef = useRef<number[]>([]);
@@ -166,11 +198,20 @@ export function PositionChart({
     [wallets, hiddenSet],
   );
 
+  const filteredLiqWallets = useMemo(
+    () =>
+      overlays.liqs
+        ? (wallets ?? []).filter((w) => w.liquidationPx && w.liquidationPx > 0 && !hiddenSet.has(w.address.toLowerCase()))
+        : [],
+    [wallets, hiddenSet, overlays.liqs],
+  );
+
   // Chart is created once per mount and torn down on unmount; coin/tf changes update data in
   // place so panning and zoom survive a live refresh.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const liqLines = liqLinesRef.current;
     const chart = createChart(el, {
       height,
       autoSize: true,
@@ -209,7 +250,15 @@ export function PositionChart({
 
     const reposition = () => {
       renderBands(chart, bandsRef.current, bandsDataRef.current.candles, bandsDataRef.current.windows);
-      renderBubbleLayer(chart, series, bubblesRef.current, bubbleDataRef.current.candles, bubbleDataRef.current.fills, bubbleDataRef.current.wallets);
+      renderBubbleLayer(
+        chart,
+        series,
+        bubblesRef.current,
+        bubbleDataRef.current.candles,
+        bubbleDataRef.current.fills,
+        bubbleDataRef.current.wallets,
+        bubbleDataRef.current.liqWallets,
+      );
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(reposition);
     chart.timeScale().subscribeSizeChange(reposition);
@@ -220,6 +269,8 @@ export function PositionChart({
       seriesRef.current = null;
       youLineRef.current = null;
       smLineRef.current = null;
+      youLiqLineRef.current = null;
+      liqLines.clear();
       fittedTfRef.current = null;
     };
   }, [coin, height]);
@@ -237,7 +288,16 @@ export function PositionChart({
     );
 
     const smAvg = smAvgProp ?? data.smAvgEntry ?? null;
-    linesRef.current = [data.yourEntry, smAvg].filter((v): v is number => typeof v === "number" && v > 0);
+    // A liquidation price only pulls the autoscale in when it's within 25% of the last close;
+    // one far away (cross margin, low leverage) would otherwise squash the candles flat.
+    const lastClose = data.candles.length > 0 ? data.candles[data.candles.length - 1].c : null;
+    const nearLiqs =
+      lastClose !== null
+        ? [youLiquidationPx, ...filteredLiqWallets.map((w) => w.liquidationPx)].filter(
+            (v): v is number => typeof v === "number" && v > 0 && Math.abs(v - lastClose) <= lastClose * 0.25,
+          )
+        : [];
+    linesRef.current = [data.yourEntry, smAvg, ...nearLiqs].filter((v): v is number => typeof v === "number" && v > 0);
 
     if (data.yourEntry !== undefined) {
       const worse =
@@ -282,16 +342,74 @@ export function PositionChart({
       smLineRef.current = null;
     }
 
+    const late = cssVar("--color-late", THEME.down);
+    if (overlays.liqs && typeof youLiquidationPx === "number" && youLiquidationPx > 0) {
+      const title = `You liq. ${formatPrice(youLiquidationPx)}`;
+      if (youLiqLineRef.current) youLiqLineRef.current.applyOptions({ price: youLiquidationPx, title });
+      else
+        youLiqLineRef.current = series.createPriceLine({
+          price: youLiquidationPx,
+          color: late,
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          lineVisible: true,
+          title,
+        });
+    } else if (youLiqLineRef.current) {
+      series.removePriceLine(youLiqLineRef.current);
+      youLiqLineRef.current = null;
+    }
+
+    // Reconcile one dashed liquidation line per wallet: update in place, create for new
+    // addresses, drop any whose wallet went hidden, closed, or lost its liquidation price.
+    const liqColor = withAlpha(late, 0.6);
+    const liqAddrs = new Set(filteredLiqWallets.map((w) => w.address.toLowerCase()));
+    for (const w of filteredLiqWallets) {
+      const addr = w.address.toLowerCase();
+      const price = w.liquidationPx as number;
+      const title = `${walletLabel(w.label, w.address)} liq`;
+      const existing = liqLinesRef.current.get(addr);
+      if (existing) existing.applyOptions({ price, title });
+      else
+        liqLinesRef.current.set(
+          addr,
+          series.createPriceLine({
+            price,
+            color: liqColor,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            lineVisible: true,
+            title,
+          }),
+        );
+    }
+    for (const [addr, line] of liqLinesRef.current) {
+      if (!liqAddrs.has(addr)) {
+        series.removePriceLine(line);
+        liqLinesRef.current.delete(addr);
+      }
+    }
+
     bandsDataRef.current = { candles: data.candles, windows: overlays.windows ? data.windows : [] };
-    bubbleDataRef.current = { candles: data.candles, fills: filteredFills, wallets: filteredWallets };
+    bubbleDataRef.current = { candles: data.candles, fills: filteredFills, wallets: filteredWallets, liqWallets: filteredLiqWallets };
     renderBands(chart, bandsRef.current, bandsDataRef.current.candles, bandsDataRef.current.windows);
-    renderBubbleLayer(chart, series, bubblesRef.current, bubbleDataRef.current.candles, bubbleDataRef.current.fills, bubbleDataRef.current.wallets);
+    renderBubbleLayer(
+      chart,
+      series,
+      bubblesRef.current,
+      bubbleDataRef.current.candles,
+      bubbleDataRef.current.fills,
+      bubbleDataRef.current.wallets,
+      bubbleDataRef.current.liqWallets,
+    );
 
     if (fittedTfRef.current !== tf) {
       chart.timeScale().fitContent();
       fittedTfRef.current = tf;
     }
-  }, [data, coin, tf, smAvgProp, entryLabel, overlays, filteredFills, filteredWallets]);
+  }, [data, coin, tf, smAvgProp, entryLabel, overlays, filteredFills, filteredWallets, filteredLiqWallets, youLiquidationPx]);
 
   const gap =
     data?.yourEntry !== undefined && (smAvgProp ?? data?.smAvgEntry) != null
@@ -350,6 +468,7 @@ export function PositionChart({
         <OverlayToggle checked={overlays.buys} onChange={() => setOverlays((o) => ({ ...o, buys: !o.buys }))} label="Buys" />
         <OverlayToggle checked={overlays.sells} onChange={() => setOverlays((o) => ({ ...o, sells: !o.sells }))} label="Sells" />
         <OverlayToggle checked={overlays.windows} onChange={() => setOverlays((o) => ({ ...o, windows: !o.windows }))} label="Exit windows" />
+        <OverlayToggle checked={overlays.liqs} onChange={() => setOverlays((o) => ({ ...o, liqs: !o.liqs }))} label="Liquidations" />
         <label className="flex items-center gap-1.5 text-[12px] text-ink-2 ml-auto">
           Min size
           <select
@@ -511,10 +630,21 @@ function fillHoverCard(card: HTMLDivElement, items: BubbleItem[]) {
   card.append(head, chip, rows, link);
 }
 
+/** Clamps a price's y-coordinate to inside the plot area (avatar pins must stay visible even when
+ * their price is off the visible range) and reports whether it had to move, so the caller can dim
+ * an off-screen pin. Shared by entry pins and liquidation pins. */
+function clampToPlot(chart: IChartApi, host: HTMLDivElement, rawY: number): { y: number; offView: boolean } {
+  const plotH = host.clientHeight - chart.timeScale().height();
+  const y = Math.min(Math.max(rawY, 9), plotH - 9);
+  return { y, offView: y !== rawY };
+}
+
 /** Every Smart Money fill becomes a circular avatar bubble (WalletAvatar's own gradient, sized by
  * USD, ring green for a buy/add and red for a reduce/close) at (fill time, fill price), plus a
- * small avatar per tracked wallet pinned on the price-axis side at its entry. Overlapping bubbles
- * within 14px cluster into one with a count badge. Re-run on data, filter, pan/zoom and resize. */
+ * small avatar per tracked wallet pinned on the price-axis side at its entry, and, separately, at
+ * its live liquidation price (late-colour ring, "liq" caption) when the liquidations overlay is
+ * on. Overlapping bubbles within 14px cluster into one with a count badge. Re-run on data, filter,
+ * pan/zoom and resize. */
 function renderBubbleLayer(
   chart: IChartApi,
   series: ISeriesApi<"Candlestick">,
@@ -522,6 +652,7 @@ function renderBubbleLayer(
   candles: Candle[],
   fills: ChartMarker[],
   wallets: ChartWallet[],
+  liqWallets: ChartWallet[],
 ) {
   if (!host) return;
   host.replaceChildren();
@@ -613,9 +744,7 @@ function renderBubbleLayer(
     const rawY = series.priceToCoordinate(w.entryPx);
     if (rawY === null) continue;
     // Keep pins inside the plot: an entry above or below the visible range sits at the edge, dimmed.
-    const plotH = host.clientHeight - chart.timeScale().height();
-    const y = Math.min(Math.max(rawY, 9), plotH - 9);
-    const offView = y !== rawY;
+    const { y, offView } = clampToPlot(chart, host, rawY);
     const x = totalWidth - axisWidth / 2;
     const label = walletLabel(w.label, w.address);
 
@@ -634,6 +763,40 @@ function renderBubbleLayer(
     el.style.background = avatarBackground(w.address);
     if (offView) el.style.opacity = "0.55";
     el.style.boxShadow = `0 0 0 2px ${THEME.entryRing}`;
+    host.appendChild(el);
+  }
+
+  const late = cssVar("--color-late", THEME.down);
+  for (const w of liqWallets) {
+    if (!w.liquidationPx || w.liquidationPx <= 0) continue;
+    const rawY = series.priceToCoordinate(w.liquidationPx);
+    if (rawY === null) continue;
+    const { y, offView } = clampToPlot(chart, host, rawY);
+    const x = totalWidth - axisWidth / 2;
+    const label = walletLabel(w.label, w.address);
+
+    const el = document.createElement("a");
+    el.href = `/w/${w.address}`;
+    el.tabIndex = 0;
+    el.title = `${label} liquidates at ${formatPrice(w.liquidationPx)}`;
+    el.setAttribute("aria-label", `${label} liquidates at ${formatPrice(w.liquidationPx)}`);
+    el.className =
+      "absolute rounded-full pointer-events-auto transition-transform duration-150 motion-reduce:transition-none hover:scale-110 focus-visible:scale-110 flex items-center justify-center";
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.width = "14px";
+    el.style.height = "14px";
+    el.style.transform = "translate(-50%, -50%)";
+    el.style.background = avatarBackground(w.address);
+    if (offView) el.style.opacity = "0.55";
+    // A 1px late-colour ring distinguishes a liquidation pin from an entry pin's neutral ring.
+    el.style.boxShadow = `0 0 0 1px ${late}`;
+
+    const caption = document.createElement("span");
+    caption.className = "absolute -bottom-3 text-[8px] fig text-late leading-none";
+    caption.textContent = "liq";
+    el.appendChild(caption);
+
     host.appendChild(el);
   }
 }

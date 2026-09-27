@@ -6,6 +6,8 @@ import { use, useCallback, useEffect, useMemo, useState } from "react";
 import type { AlarmCreated, Companion, OverlapRow } from "@/lib/types";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
 import { PositionChart, type ChartWallet } from "@/components/chart/PositionChart";
+import { ForcedExitPanel } from "@/components/report/ForcedExitPanel";
+import { forcedExitLadder } from "@/lib/forced";
 import { TokenCell } from "@/components/TokenIcon";
 import { companionLabel, formatMinutes, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
@@ -444,8 +446,13 @@ function PositionDetail({
         cohort: c.cohort,
         positionValueUsd: c.positionValueUsd,
         entryPx: c.entryPx,
+        liquidationPx: c.liquidationPx,
       })),
     [companions],
+  );
+  const ladder = useMemo(
+    () => forcedExitLadder(row.direction, row.markPx, row.liquidationPx, companions),
+    [row.direction, row.markPx, row.liquidationPx, companions],
   );
   return (
     <div className="flex flex-col gap-3">
@@ -456,7 +463,15 @@ function PositionDetail({
           {pressure.read}
         </p>
       )}
-      <PositionChart coin={row.coin} address={address} height={360} smAvgEntry={smAvgEntry(row)} wallets={wallets} />
+      <PositionChart
+        coin={row.coin}
+        address={address}
+        height={360}
+        smAvgEntry={smAvgEntry(row)}
+        wallets={wallets}
+        youLiquidationPx={row.liquidationPx}
+      />
+      <ForcedExitPanel coin={row.coin} direction={row.direction} markPx={row.markPx} ladder={ladder} />
       <CohortBar coin={row.coin} />
       {row.companions.length === 0 ? (
         <p className="text-[13px] text-ink-2 border-t border-rule pt-3">
@@ -551,6 +566,7 @@ function SubCompanionRow({
             {companionLabel(c)}
           </label>
           {cohortChip}
+          {c.stillOpen === false && <span className="chip chip-late" title="Hyperliquid shows this wallet no longer holds this position">Already out</span>}
         </span>
         <Link href={`/w/${c.address}`} className="fig text-[12px] text-ink-3 underline decoration-rule hover:decoration-ink">
           {shortAddr(c.address)}
