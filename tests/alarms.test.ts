@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   alarmsForChat,
   bindCode,
+  buildRulePreviewSentence,
   buildWhyQuestion,
   buildWhyTestQuestion,
   createAlarmRecord,
   distinctLeaderCount,
   dropWatch,
+  effectiveReducePct,
   formatAlarmMessage,
   formatConsensusMessage,
   formatDropMessage,
@@ -15,16 +17,20 @@ import {
   formatTestMessage,
   formatWhyAnswer,
   markHeld,
+  markLargestWatch,
   ownerStillHolds,
+  parseAlarmRule,
   pruneRecent,
   randomCode,
   readExitDna,
   setSmartAlertId,
   shouldDropForClose,
   shouldFire,
+  shouldNotify,
   smartAlertIdsForChat,
   unbindChat,
   whyCacheKey,
+  type AlarmRule,
   type AlarmStore,
   type RecentReduce,
   type Watch,
@@ -563,6 +569,174 @@ describe("whyCacheKey", () => {
     const at = Date.UTC(2026, 0, 15, 10, 0, 0);
     expect(whyCacheKey("0xleaderA", "STRK", at)).not.toBe(whyCacheKey("0xleaderB", "STRK", at));
     expect(whyCacheKey("0xleader", "STRK", at)).not.toBe(whyCacheKey("0xleader", "ETH", at));
+  });
+});
+
+describe("parseAlarmRule", () => {
+  function valid(overrides: Partial<AlarmRule> = {}): unknown {
+    return { trigger: "any", minReducePct: 0, action: "alert", askAgent: true, ...overrides };
+  }
+
+  it("accepts a well-formed rule", () => {
+    expect(parseAlarmRule(valid())).toEqual({ trigger: "any", minReducePct: 0, action: "alert", askAgent: true });
+  });
+
+  it("accepts consensusN only when given, and rejects a consensusN below 2", () => {
+    expect(parseAlarmRule(valid({ trigger: "consensus", consensusN: 3 }))).toEqual({
+      trigger: "consensus",
+      minReducePct: 0,
+      action: "alert",
+      askAgent: true,
+      consensusN: 3,
+    });
+    expect(parseAlarmRule(valid({ trigger: "consensus", consensusN: 1 }))).toBeNull();
+    expect(parseAlarmRule(valid({ trigger: "consensus", consensusN: 2.5 }))).toBeNull();
+  });
+
+  it("rejects an unknown trigger or action", () => {
+    expect(parseAlarmRule(valid({ trigger: "sometimes" as never }))).toBeNull();
+    expect(parseAlarmRule(valid({ action: "cutall" as never }))).toBeNull();
+  });
+
+  it("rejects a minReducePct outside 0..100, or of the wrong type", () => {
+    expect(parseAlarmRule(valid({ minReducePct: -1 }))).toBeNull();
+    expect(parseAlarmRule(valid({ minReducePct: 101 }))).toBeNull();
+    expect(parseAlarmRule(valid({ minReducePct: "25" as never }))).toBeNull();
+  });
+
+  it("rejects a non-boolean askAgent, and null/non-object input", () => {
+    expect(parseAlarmRule(valid({ askAgent: "yes" as never }))).toBeNull();
+    expect(parseAlarmRule(null)).toBeNull();
+    expect(parseAlarmRule("any")).toBeNull();
+  });
+});
+
+describe("markLargestWatch", () => {
+  it("flags only the watch with the largest value", () => {
+    const watches = [watch({ coin: "ETH" }), watch({ coin: "BTC" }), watch({ coin: "SOL" })];
+    const marked = markLargestWatch(watches, [1000, 5000, 2000]);
+    expect(marked.map((w) => !!w.largest)).toEqual([false, true, false]);
+  });
+
+  it("is a no-op when no value is usable", () => {
+    const watches = [watch({ coin: "ETH" }), watch({ coin: "BTC" })];
+    const marked = markLargestWatch(watches, [undefined, null]);
+    expect(marked).toEqual(watches);
+  });
+});
+
+describe("effectiveReducePct", () => {
+  it("falls back to the watch's legacy protect field when there is no rule", () => {
+    expect(effectiveReducePct(undefined, watch({ protect: { reducePct: 40 } }))).toBe(40);
+    expect(effectiveReducePct(undefined, watch({ protect: null }))).toBeNull();
+  });
+
+  it("maps a rule's action to a reduce percent, ignoring any legacy protect field", () => {
+    const rule: AlarmRule = { trigger: "any", minReducePct: 0, action: "cut25", askAgent: true };
+    expect(effectiveReducePct(rule, watch({ protect: { reducePct: 99 } }))).toBe(25);
+    expect(effectiveReducePct({ ...rule, action: "cut50" }, watch())).toBe(50);
+    expect(effectiveReducePct({ ...rule, action: "close" }, watch())).toBe(100);
+    expect(effectiveReducePct({ ...rule, action: "alert" }, watch())).toBeNull();
+  });
+});
+
+describe("shouldNotify", () => {
+  const ctx = { distinctLeaders: 1, leaderExitRiskHigh: false };
+
+  it("with no rule, notifies on any matching reduce - same as before the scenario builder", () => {
+    expect(shouldNotify(undefined, watch(), change(), ctx)).toBe(true);
+  });
+
+  it("blocks below the rule's minReducePct, passes at or above it", () => {
+    const rule: AlarmRule = { trigger: "any", minReducePct: 60, action: "alert", askAgent: true };
+    expect(shouldNotify(rule, watch(), change({ reducedFraction: 0.5 }), ctx)).toBe(false);
+    expect(shouldNotify(rule, watch(), change({ reducedFraction: 0.6 }), ctx)).toBe(true);
+  });
+
+  it("consensus trigger requires distinctLeaders to reach consensusN (default 2), can fail then pass", () => {
+    const rule: AlarmRule = { trigger: "consensus", minReducePct: 0, action: "alert", askAgent: true };
+    expect(shouldNotify(rule, watch(), change(), { distinctLeaders: 1, leaderExitRiskHigh: false })).toBe(false);
+    expect(shouldNotify(rule, watch(), change(), { distinctLeaders: 2, leaderExitRiskHigh: false })).toBe(true);
+  });
+
+  it("consensus trigger honors a custom consensusN", () => {
+    const rule: AlarmRule = { trigger: "consensus", minReducePct: 0, consensusN: 3, action: "alert", askAgent: true };
+    expect(shouldNotify(rule, watch(), change(), { distinctLeaders: 2, leaderExitRiskHigh: false })).toBe(false);
+    expect(shouldNotify(rule, watch(), change(), { distinctLeaders: 3, leaderExitRiskHigh: false })).toBe(true);
+  });
+
+  it("largest trigger only notifies for the watch flagged largest at bind time", () => {
+    const rule: AlarmRule = { trigger: "largest", minReducePct: 0, action: "alert", askAgent: true };
+    expect(shouldNotify(rule, watch({ largest: false }), change(), ctx)).toBe(false);
+    expect(shouldNotify(rule, watch({ largest: true }), change(), ctx)).toBe(true);
+  });
+
+  it("high_risk trigger only notifies when the leader's cached report reads High", () => {
+    const rule: AlarmRule = { trigger: "high_risk", minReducePct: 0, action: "alert", askAgent: true };
+    expect(shouldNotify(rule, watch(), change(), { distinctLeaders: 1, leaderExitRiskHigh: false })).toBe(false);
+    expect(shouldNotify(rule, watch(), change(), { distinctLeaders: 1, leaderExitRiskHigh: true })).toBe(true);
+  });
+});
+
+describe("buildRulePreviewSentence", () => {
+  it("renders the exact consensus example sentence", () => {
+    const rule: AlarmRule = { trigger: "consensus", minReducePct: 25, consensusN: 2, action: "cut25", askAgent: true };
+    expect(buildRulePreviewSentence(rule, 8, "PURR")).toBe(
+      "When 2 or more of your 8 watched Smart Money wallets reduce within an hour by at least 25%, message me on Telegram and cut my PURR position 25%.",
+    );
+  });
+
+  it("omits the reduce qualifier when minReducePct is 0, and names 'my position' with no single coin", () => {
+    const rule: AlarmRule = { trigger: "any", minReducePct: 0, action: "alert", askAgent: true };
+    expect(buildRulePreviewSentence(rule, 3, null)).toBe(
+      "When any of your 3 watched Smart Money wallets reduces, message me on Telegram.",
+    );
+  });
+
+  it("renders the largest-holder trigger and a close action", () => {
+    const rule: AlarmRule = { trigger: "largest", minReducePct: 10, action: "close", askAgent: false };
+    expect(buildRulePreviewSentence(rule, 5, "ETH")).toBe(
+      "When the largest holder you watch reduces by at least 10%, message me on Telegram and close my ETH position.",
+    );
+  });
+
+  it("renders the high-risk trigger", () => {
+    const rule: AlarmRule = { trigger: "high_risk", minReducePct: 0, action: "cut50", askAgent: true };
+    expect(buildRulePreviewSentence(rule, 1, "BTC")).toBe(
+      "When a High exit-risk wallet you watch reduces, message me on Telegram and cut my BTC position 50%.",
+    );
+  });
+});
+
+describe("formatOnboardingMessage with a rule", () => {
+  it("states the rule in the same plain sentence, right after the armed count", () => {
+    const rule: AlarmRule = { trigger: "consensus", minReducePct: 25, consensusN: 2, action: "cut25", askAgent: true };
+    const msg = formatOnboardingMessage(
+      [
+        {
+          watch: watch({ leader: "0xa", coin: "PURR" }),
+          leaderPosition: null,
+          leaderMarkPx: null,
+          medianWindowMin: null,
+          exitDna: null,
+          ownerPosition: null,
+        },
+      ],
+      "https://x.example",
+      [],
+      rule,
+    );
+    expect(msg).toContain(
+      "When 2 or more of your 1 watched Smart Money wallets reduce within an hour by at least 25%, message me on Telegram and cut my PURR position 25%.",
+    );
+  });
+
+  it("has no rule sentence when the alarm has no rule - backward compatible with existing tests above", () => {
+    const msg = formatOnboardingMessage(
+      [{ watch: watch(), leaderPosition: null, leaderMarkPx: null, medianWindowMin: null, exitDna: null, ownerPosition: null }],
+      "https://x.example",
+    );
+    expect(msg).not.toContain("watched Smart Money wallet");
   });
 });
 

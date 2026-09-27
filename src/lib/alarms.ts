@@ -4,8 +4,11 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { buildRulePreviewSentence, type AlarmRule } from "./alarmRule";
 import type { Direction, ExitDna, OpenPosition, PositionChange, WalletReport } from "./types";
 import type { MirrorResult } from "./mirror";
+
+export { buildRulePreviewSentence, type AlarmAction, type AlarmRule, type AlarmTrigger } from "./alarmRule";
 
 export interface ProtectRule {
   reducePct: number; // 1..100: cut the owner's position by this much when the leader reduces
@@ -20,6 +23,8 @@ export interface Watch {
   everHeld?: boolean; // true once ownerStillHolds has been observed true for this coin; gates the
   // "owner fully closed it" drop so a watch is never dropped just because the owner didn't hold
   // the coin yet at bind time
+  largest?: boolean; // set once, at bind time, on the watch whose leader held the largest
+  // positionValueUsd among this alarm's watches - what trigger "largest" fires on
 }
 
 export interface AlarmRecord {
@@ -30,6 +35,7 @@ export interface AlarmRecord {
   mirror: boolean;
   createdAt: number;
   smartAlerts?: Record<string, string>; // coin -> Nansen smart-alert id, created on /start, deleted on /stop
+  rule?: AlarmRule; // absent on alarms created before the scenario builder existed
 }
 
 export type AlarmStore = Record<string, AlarmRecord>;
@@ -71,8 +77,93 @@ export function randomCode(len = 12): string {
   return out;
 }
 
-export function createAlarmRecord(owner: string, watches: Watch[]): AlarmRecord {
-  return { code: randomCode(), owner, watches, chatId: null, mirror: false, createdAt: Date.now() };
+export function createAlarmRecord(owner: string, watches: Watch[], rule?: AlarmRule): AlarmRecord {
+  return { code: randomCode(), owner, watches, chatId: null, mirror: false, createdAt: Date.now(), ...(rule ? { rule } : {}) };
+}
+
+/** Flags the watch whose leader held the largest positionValueUsd at bind time with `largest:
+ * true`, for trigger "largest" to check later - the value itself is never stored, only the flag.
+ * `values[i]` corresponds to `watches[i]`; a missing/non-finite value can't win. No-op when
+ * nothing has a usable value. */
+export function markLargestWatch(watches: Watch[], values: (number | null | undefined)[]): Watch[] {
+  let bestIdx = -1;
+  let bestV = -Infinity;
+  values.forEach((v, i) => {
+    if (typeof v === "number" && Number.isFinite(v) && v > bestV) {
+      bestV = v;
+      bestIdx = i;
+    }
+  });
+  if (bestIdx === -1) return watches;
+  return watches.map((w, i) => (i === bestIdx ? { ...w, largest: true } : w));
+}
+
+/** Strict validation for the scenario builder's POST body: any unknown shape returns null rather
+ * than guessing a default, so a malformed rule fails the request instead of silently arming the
+ * wrong alarm. */
+export function parseAlarmRule(input: unknown): AlarmRule | null {
+  if (!input || typeof input !== "object") return null;
+  const r = input as Record<string, unknown>;
+
+  const trigger = r.trigger;
+  if (trigger !== "any" && trigger !== "consensus" && trigger !== "largest" && trigger !== "high_risk") return null;
+
+  const minReducePct = r.minReducePct;
+  if (typeof minReducePct !== "number" || !Number.isFinite(minReducePct) || minReducePct < 0 || minReducePct > 100) return null;
+
+  const action = r.action;
+  if (action !== "alert" && action !== "cut25" && action !== "cut50" && action !== "close") return null;
+
+  const askAgent = r.askAgent;
+  if (typeof askAgent !== "boolean") return null;
+
+  let consensusN: number | undefined;
+  if (r.consensusN !== undefined) {
+    if (typeof r.consensusN !== "number" || !Number.isInteger(r.consensusN) || r.consensusN < 2) return null;
+    consensusN = r.consensusN;
+  }
+
+  return { trigger, minReducePct, action, askAgent, ...(consensusN !== undefined ? { consensusN } : {}) };
+}
+
+/** What reducedFraction the mirror/protect path should use for this fire, or null to not protect
+ * at all. A rule's action always wins when the alarm has one; without a rule, falls back to the
+ * watch's own legacy `protect` field exactly as before the scenario builder existed. */
+export function effectiveReducePct(rule: AlarmRule | undefined, watch: Watch): number | null {
+  if (!rule) return watch.protect ? watch.protect.reducePct : null;
+  switch (rule.action) {
+    case "cut25":
+      return 25;
+    case "cut50":
+      return 50;
+    case "close":
+      return 100;
+    default:
+      return null;
+  }
+}
+
+/** Whether this already-shouldFire-matched reduce should actually notify, given the alarm's rule.
+ * No rule at all (an alarm from before the scenario builder) behaves exactly like trigger "any",
+ * minReducePct 0 - i.e. every matching reduce notifies, same as always. */
+export function shouldNotify(
+  rule: AlarmRule | undefined,
+  watch: Watch,
+  change: PositionChange,
+  ctx: { distinctLeaders: number; leaderExitRiskHigh: boolean },
+): boolean {
+  const minReducePct = rule?.minReducePct ?? 0;
+  if (change.reducedFraction * 100 < minReducePct) return false;
+  switch (rule?.trigger ?? "any") {
+    case "any":
+      return true;
+    case "consensus":
+      return ctx.distinctLeaders >= (rule?.consensusN ?? 2);
+    case "largest":
+      return !!watch.largest;
+    case "high_risk":
+      return ctx.leaderExitRiskHigh;
+  }
 }
 
 /** /start <code>: binds a chat to a pending alarm. Returns the updated store and the bound
@@ -397,11 +488,13 @@ function formatSmartAlertLine(s: SmartAlertOnboardingInput): string {
 }
 
 /** Sent once, on /start: what got armed, in enough detail that the user can tell it's actually
- * watching something real, not the one-line "Watching: STRK (long)" this replaces. */
+ * watching something real, not the one-line "Watching: STRK (long)" this replaces. When the alarm
+ * carries a scenario-builder rule, states it in the same plain sentence the builder previewed. */
 export function formatOnboardingMessage(
   watches: OnboardingWatchInput[],
   appUrl: string,
   smartAlerts: SmartAlertOnboardingInput[] = [],
+  rule?: AlarmRule,
 ): string {
   if (watches.length === 0) {
     return "No watches bound to this code yet. Create a new alarm from the app.";
@@ -409,8 +502,11 @@ export function formatOnboardingMessage(
   const blocks = watches.map((w) => formatOneOnboardingWatch(w, appUrl));
   // Only armed Nansen alerts are worth a line; a coin Nansen cannot watch on-chain is simply not mentioned.
   const smartAlertLines = smartAlerts.filter((a) => a.status !== "skipped").map(formatSmartAlertLine);
+  const coins = new Set(watches.map((w) => w.watch.coin));
+  const ruleLine = rule ? buildRulePreviewSentence(rule, watches.length, coins.size === 1 ? [...coins][0] : null) : null;
   return (
     `Alarm armed on ${watches.length} watch${watches.length === 1 ? "" : "es"}.\n\n` +
+    (ruleLine ? `${ruleLine}\n\n` : "") +
     blocks.join("\n\n") +
     (smartAlertLines.length > 0 ? `\n\n${smartAlertLines.join("\n")}` : "") +
     `\n\nCommands: /list watches, /stop all alarms, /test to see a sample alert.`

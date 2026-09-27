@@ -10,6 +10,7 @@ import {
   buildWhyTestQuestion,
   distinctLeaderCount,
   dropWatch,
+  effectiveReducePct,
   formatAlarmMessage,
   formatConsensusMessage,
   formatDropMessage,
@@ -29,6 +30,7 @@ import {
   shortAddr,
   shouldDropForClose,
   shouldFire,
+  shouldNotify,
   smartAlertIdsForChat,
   unbindChat,
   whyCacheKey,
@@ -53,6 +55,7 @@ const leaderSnapshots = new Map<string, OpenPosition[]>();
 interface ReportSummary {
   medianWindowMin: number | null;
   exitDna: string | null;
+  exitRiskHigh: boolean; // report.exitRisk?.level === "high" - what trigger "high_risk" fires on
 }
 const reportSummaryByLeader = new Map<string, ReportSummary>();
 
@@ -64,9 +67,9 @@ async function reportSummaryFor(leader: string): Promise<ReportSummary> {
   let summary: ReportSummary;
   try {
     const report: WalletReport = await buildReport(leader);
-    summary = { medianWindowMin: report.medianWindowMin, exitDna: readExitDna(report) };
+    summary = { medianWindowMin: report.medianWindowMin, exitDna: readExitDna(report), exitRiskHigh: report.exitRisk?.level === "high" };
   } catch {
-    summary = { medianWindowMin: null, exitDna: null };
+    summary = { medianWindowMin: null, exitDna: null, exitRiskHigh: false };
   }
   reportSummaryByLeader.set(leader, summary);
   return summary;
@@ -260,7 +263,7 @@ async function tick(): Promise<void> {
           `reduce: leader=${leader} coin=${change.coin} from=${change.fromSize} to=${change.toSize}`,
         );
 
-        const { medianWindowMin, exitDna } = await reportSummaryFor(leader);
+        const { medianWindowMin, exitDna, exitRiskHigh } = await reportSummaryFor(leader);
         const ownerSize = ownerPosByAddr.get(record.owner)?.find((p) => p.coin === watch.coin)?.size ?? 0;
         const price = mids[change.coin] ?? 0;
         const usdValue = Math.abs(change.fromSize - change.toSize) * price;
@@ -281,9 +284,19 @@ async function tick(): Promise<void> {
           now,
         );
 
+        // Rule gate: a rule-less alarm behaves exactly as before (any watched reduce notifies);
+        // a rule's trigger and minReducePct decide whether this particular reduce is worth a
+        // message at all, not just whether it matched the watch's coin/direction.
+        const notify = shouldNotify(record.rule, watch, change, {
+          distinctLeaders: distinctLeaderCount(history),
+          leaderExitRiskHigh: exitRiskHigh,
+        });
+        if (!notify) continue;
+
         let mirrorResult = null;
-        if (record.mirror || watch.protect) {
-          const fraction = watch.protect ? watch.protect.reducePct / 100 : change.reducedFraction;
+        const reducePct = effectiveReducePct(record.rule, watch);
+        if (record.mirror || reducePct !== null) {
+          const fraction = reducePct !== null ? reducePct / 100 : change.reducedFraction;
           mirrorResult = await mirrorChange({ ...change, reducedFraction: fraction }, record.owner).catch((err) => {
             errors++;
             console.error("mirrorChange failed:", err instanceof Error ? err.message : err);
@@ -318,20 +331,25 @@ async function tick(): Promise<void> {
                 protectionLine,
               });
 
-        // "Why is it exiting?" attaches to every real reduce fire (single-leader or consensus),
-        // always about the leader/coin that just fired this tick.
-        const whyQuestion = buildWhyQuestion({
-          leaderAddress: leader,
-          leaderLabel: watch.label,
-          coin: change.coin,
-          direction: change.direction,
-          pctClosed: change.reducedFraction * 100,
-          usdValue,
-          atMs: now,
-        });
-        const whyId = rememberWhyContext({ leader, coin: change.coin, question: whyQuestion, atMs: now });
+        // "Why is it exiting?" attaches to every real reduce fire (single-leader or consensus)
+        // unless the alarm's rule turned it off, always about the leader/coin that just fired.
+        const askAgent = record.rule ? record.rule.askAgent : true;
+        let replyMarkup: ReplyMarkup | undefined;
+        if (askAgent) {
+          const whyQuestion = buildWhyQuestion({
+            leaderAddress: leader,
+            leaderLabel: watch.label,
+            coin: change.coin,
+            direction: change.direction,
+            pctClosed: change.reducedFraction * 100,
+            usdValue,
+            atMs: now,
+          });
+          const whyId = rememberWhyContext({ leader, coin: change.coin, question: whyQuestion, atMs: now });
+          replyMarkup = whyButton(whyId);
+        }
 
-        await sendMessage(record.chatId, message, undefined, whyButton(whyId))
+        await sendMessage(record.chatId, message, undefined, replyMarkup)
           .then(() => messagesSent++)
           .catch((err) => {
             errors++;
@@ -470,7 +488,7 @@ async function pollTelegram(): Promise<void> {
           }),
         );
 
-        const message = formatOnboardingMessage(watchInputs, APP_URL, smartAlerts);
+        const message = formatOnboardingMessage(watchInputs, APP_URL, smartAlerts, bound.record.rule);
         await sendMessage(chat, message, "HTML").catch(() => {});
       } else if (text.startsWith("/stop")) {
         const alertIds = smartAlertIdsForChat(store, chat);

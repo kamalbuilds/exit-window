@@ -5,11 +5,15 @@ import { CaretDown } from "@phosphor-icons/react";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import type { AlarmCreated, Companion, OverlapRow } from "@/lib/types";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
-import { PositionChart } from "@/components/chart/PositionChart";
+import { PositionChart, type ChartWallet } from "@/components/chart/PositionChart";
 import { TokenCell } from "@/components/TokenIcon";
 import { companionLabel, formatMinutes, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
 import { useQueuedWalletReport, type QueuedWalletState } from "@/components/walletQueue";
+import { SmartMoneyFilterBar, loadFiltersFromStorage, saveFiltersToStorage } from "@/components/filters/SmartMoneyFilterBar";
+import { DEFAULT_FILTERS, matchesFilters, type ExitRiskLevel, type SmartMoneyFilters } from "@/components/filters/smartMoneyFilters";
+import { ScenarioPanel } from "@/components/alarm/ScenarioPanel";
+import type { AlarmRule } from "@/lib/alarmRule";
 
 /** Renders a queued wallet report's timing status. Never "no window": that phrase is reserved for
  * a real medianWindowMin===null; a failed or in-flight fetch says so instead. */
@@ -104,12 +108,55 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
   }, [rows]);
   const [watch, setWatch] = useState<Set<WatchKey> | null>(null);
 
-  // Default: watch the three largest companions of every position.
+  // Smart Money filter bar state, persisted in localStorage. Starts at DEFAULT_FILTERS on both
+  // server and first client render (no hydration mismatch), then loads the saved value once mounted.
+  const [filters, setFilters] = useState<SmartMoneyFilters>(DEFAULT_FILTERS);
+  useEffect(() => {
+    setFilters(loadFiltersFromStorage());
+  }, []);
+  useEffect(() => {
+    saveFiltersToStorage(filters);
+  }, [filters]);
+
+  // Exit risk level per wallet, filled in as each companion's WalletReport loads (top holder,
+  // second auto-timed companion, or a manually timed one). Feeds the exit-risk filter clause.
+  const [reportsByAddr, setReportsByAddr] = useState<Record<string, ExitRiskLevel | null>>({});
+  const reportExitRisk = useCallback((addr: string, level: ExitRiskLevel | null) => {
+    const k = addr.toLowerCase();
+    setReportsByAddr((prev) => (prev[k] === level ? prev : { ...prev, [k]: level }));
+  }, []);
+
+  // Filtered companions per row, keyed the same as rowKey. Table rendering, the default watch
+  // set, the fastest-window KPI, and the chart's wallet list all read from this; entryGapPct/
+  // smAvgEntry stay on the unfiltered row since they're factual Smart Money market context.
+  const companionsMap = useMemo(() => {
+    const m = new Map<string, Companion[]>();
+    rows.forEach((r) =>
+      m.set(
+        rowKey(r),
+        r.companions.filter((c) => matchesFilters(c, filters, reportsByAddr[c.address.toLowerCase()] ?? null)),
+      ),
+    );
+    return m;
+  }, [rows, filters, reportsByAddr]);
+  const companionsFor = useCallback((r: OverlapRow) => companionsMap.get(rowKey(r)) ?? [], [companionsMap]);
+
+  const { shownCount, totalCount } = useMemo(() => {
+    const all = new Set<string>();
+    const shown = new Set<string>();
+    rows.forEach((r) => {
+      r.companions.forEach((c) => all.add(c.address.toLowerCase()));
+      companionsFor(r).forEach((c) => shown.add(c.address.toLowerCase()));
+    });
+    return { shownCount: shown.size, totalCount: all.size };
+  }, [rows, companionsFor]);
+
+  // Default: watch the three largest (filtered) companions of every position.
   const defaults = useMemo(() => {
     const s = new Set<WatchKey>();
-    rows.forEach((r) => r.companions.slice(0, 3).forEach((c) => s.add(key(c.address, r))));
+    rows.forEach((r) => companionsFor(r).slice(0, 3).forEach((c) => s.add(key(c.address, r))));
     return s;
-  }, [rows]);
+  }, [rows, companionsFor]);
   const active = watch ?? defaults;
   const toggle = (k: WatchKey) =>
     setWatch(() => {
@@ -136,7 +183,7 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
   const reportTopWindow = useCallback((addr: string, v: number | null) => {
     setTopWindows((prev) => (prev[addr] === v ? prev : { ...prev, [addr]: v }));
   }, []);
-  const expectedReports = useMemo(() => rows.filter((r) => r.companions.length > 0).length, [rows]);
+  const expectedReports = useMemo(() => rows.filter((r) => companionsFor(r).length > 0).length, [rows, companionsFor]);
   const fastestWindow = useMemo(() => {
     const vals = Object.values(topWindows).filter((v): v is number => v !== null && v !== undefined);
     return vals.length ? Math.min(...vals) : null;
@@ -197,6 +244,8 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
             </div>
           </section>
 
+          <SmartMoneyFilterBar filters={filters} onChange={setFilters} shownCount={shownCount} totalCount={totalCount} />
+
           <section aria-label="Your positions" className="panel mt-4 overflow-hidden">
             <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-rule">
               <h2 className="text-[15px] font-semibold text-ink">Your positions</h2>
@@ -222,12 +271,14 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
                   <PositionRows
                     key={rowKey(r)}
                     row={r}
+                    companions={companionsFor(r)}
                     address={address}
                     open={open.has(rowKey(r))}
                     onToggleOpen={() => toggleOpen(rowKey(r))}
                     active={active}
                     onToggle={toggle}
                     onTopWindow={reportTopWindow}
+                    onReport={reportExitRisk}
                   />
                 ))}
               </tbody>
@@ -242,22 +293,27 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
 
 function PositionRows({
   row,
+  companions,
   address,
   open,
   onToggleOpen,
   active,
   onToggle,
   onTopWindow,
+  onReport,
 }: {
   row: OverlapRow;
+  /** row.companions after the Smart Money filter bar; drives the table, the top holder and the chart. */
+  companions: Companion[];
   address: string;
   open: boolean;
   onToggleOpen: () => void;
   active: Set<WatchKey>;
   onToggle: (k: WatchKey) => void;
   onTopWindow: (addr: string, v: number | null) => void;
+  onReport: (addr: string, level: ExitRiskLevel | null) => void;
 }) {
-  const top = row.companions[0] ?? null;
+  const top = companions[0] ?? null;
   // Auto-timed: the largest holder is always in the shared, one-at-a-time page queue.
   const topWindow = useQueuedWalletReport(top ? top.address : null);
   const side = row.direction === "long" ? "long" : "short";
@@ -269,8 +325,11 @@ function PositionRows({
 
   const topAddr = top?.address.toLowerCase() ?? null;
   useEffect(() => {
-    if (topAddr && topWindow.status === "ready") onTopWindow(topAddr, topWindow.data?.medianWindowMin ?? null);
-  }, [topAddr, topWindow, onTopWindow]);
+    if (topAddr && topWindow.status === "ready") {
+      onTopWindow(topAddr, topWindow.data?.medianWindowMin ?? null);
+      onReport(topAddr, topWindow.data?.exitRisk?.level ?? null);
+    }
+  }, [topAddr, topWindow, onTopWindow, onReport]);
 
   const windowClass =
     topWindow.status === "error"
@@ -299,11 +358,13 @@ function PositionRows({
         </td>
         <td className={`fig px-3 h-11 text-right text-[13px] whitespace-nowrap ${g.className}`}>{g.text}</td>
         <td className="fig px-3 h-11 text-right text-[13px] text-ink-2 whitespace-nowrap hidden md:table-cell">
-          {row.companions.length}
+          {companions.length}
         </td>
         <td className="px-3 h-11 text-right hidden md:table-cell">
           {top ? (
             <span className={`fig text-[12px] ${windowClass}`}>{windowStatusText(topWindow)}</span>
+          ) : row.companions.length > 0 ? (
+            <span className="text-[12px] text-ink-3">none match your filters</span>
           ) : (
             <span className="text-[12px] text-ink-3">no Smart Money in this market</span>
           )}
@@ -339,7 +400,16 @@ function PositionRows({
       {open && (
         <tr className="border-b border-rule">
           <td colSpan={10} id={detailId} className="bg-bezel/40 px-4 py-4">
-            <PositionDetail row={row} address={address} topWindow={top ? topWindow : null} pressure={p} active={active} onToggle={onToggle} />
+            <PositionDetail
+              row={row}
+              companions={companions}
+              address={address}
+              topWindow={top ? topWindow : null}
+              pressure={p}
+              active={active}
+              onToggle={onToggle}
+              onReport={onReport}
+            />
           </td>
         </tr>
       )}
@@ -349,19 +419,34 @@ function PositionRows({
 
 function PositionDetail({
   row,
+  companions,
   address,
   topWindow,
   pressure,
   active,
   onToggle,
+  onReport,
 }: {
   row: OverlapRow;
+  companions: Companion[];
   address: string;
   topWindow: QueuedWalletState | null;
   pressure: Pressure | null | undefined;
   active: Set<WatchKey>;
   onToggle: (k: WatchKey) => void;
+  onReport: (addr: string, level: ExitRiskLevel | null) => void;
 }) {
+  const wallets: ChartWallet[] = useMemo(
+    () =>
+      companions.map((c) => ({
+        address: c.address,
+        label: companionLabel(c),
+        cohort: c.cohort,
+        positionValueUsd: c.positionValueUsd,
+        entryPx: c.entryPx,
+      })),
+    [companions],
+  );
   return (
     <div className="flex flex-col gap-3">
       <PositionSentence row={row} topWindow={topWindow} />
@@ -371,11 +456,15 @@ function PositionDetail({
           {pressure.read}
         </p>
       )}
-      <PositionChart coin={row.coin} address={address} height={360} smAvgEntry={smAvgEntry(row)} />
+      <PositionChart coin={row.coin} address={address} height={360} smAvgEntry={smAvgEntry(row)} wallets={wallets} />
       <CohortBar coin={row.coin} />
       {row.companions.length === 0 ? (
         <p className="text-[13px] text-ink-2 border-t border-rule pt-3">
           No labeled wallet holds {row.coin} {row.direction} right now. Nothing to watch here.
+        </p>
+      ) : companions.length === 0 ? (
+        <p className="text-[13px] text-ink-2 border-t border-rule pt-3">
+          No Smart Money wallets in this position match your filters. Loosen them above to see it.
         </p>
       ) : (
         <table className="w-full border-collapse">
@@ -389,7 +478,7 @@ function PositionDetail({
             </tr>
           </thead>
           <tbody>
-            {row.companions.map((c, i) => (
+            {companions.map((c, i) => (
               <SubCompanionRow
                 key={c.address}
                 c={c}
@@ -398,6 +487,7 @@ function PositionDetail({
                 checked={active.has(key(c.address, row))}
                 onToggle={() => onToggle(key(c.address, row))}
                 autoReport={i === 0 ? topWindow : undefined}
+                onReport={onReport}
               />
             ))}
           </tbody>
@@ -414,6 +504,7 @@ function SubCompanionRow({
   checked,
   onToggle,
   autoReport,
+  onReport,
 }: {
   c: Companion;
   row: OverlapRow;
@@ -422,6 +513,7 @@ function SubCompanionRow({
   onToggle: () => void;
   /** The top holder's queued report is already fetched by the parent for the window cell; reuse it. */
   autoReport?: QueuedWalletState | null;
+  onReport: (addr: string, level: ExitRiskLevel | null) => void;
 }) {
   const auto = index < 2;
   const [timed, setTimed] = useState(false);
@@ -429,6 +521,9 @@ function SubCompanionRow({
   const secondAuto = useQueuedWalletReport(index === 1 ? c.address : null);
   const manual = useQueuedWalletReport(!auto && timed ? c.address : null);
   const q = index === 0 ? autoReport : index === 1 ? secondAuto : timed ? manual : null;
+  useEffect(() => {
+    if (q?.status === "ready") onReport(c.address.toLowerCase(), q.data?.exitRisk?.level ?? null);
+  }, [q, c.address, onReport]);
   const id = `watch-${row.coin}-${c.address}`;
   const cohortChip =
     c.cohort === "smart_money" ? (
@@ -482,73 +577,84 @@ function SubCompanionRow({
   );
 }
 
+const DEFAULT_RULE: AlarmRule = { trigger: "any", minReducePct: 0, action: "alert", askAgent: true };
+
 function AlarmBar({ owner, rows, active }: { owner: string; rows: OverlapRow[]; active: Set<WatchKey> }) {
   const [state, setState] = useState<{ status: "idle" | "sending" | "ready" | "error"; link?: string; error?: string }>({ status: "idle" });
-  const [protectPct, setProtectPct] = useState(0);
+  const [rule, setRule] = useState<AlarmRule>(DEFAULT_RULE);
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  // ?arm=1 opens the scenario panel on load, for a direct link into the builder.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("arm") === "1") setPanelOpen(true);
+  }, []);
+
   const watches = useMemo(
     () =>
       rows.flatMap((r) =>
         r.companions
           .filter((c) => active.has(key(c.address, r)))
-          .map((c) => ({ leader: c.address, coin: r.coin, direction: r.direction, ...(protectPct > 0 ? { protect: { reducePct: protectPct } } : {}) })),
+          .map((c) => ({ leader: c.address, coin: r.coin, direction: r.direction, positionValueUsd: c.positionValueUsd })),
       ),
-    [rows, active, protectPct],
+    [rows, active],
   );
+  const coins = useMemo(() => new Set(watches.map((w) => w.coin)), [watches]);
+  const previewCoin = coins.size === 1 ? [...coins][0] : null;
 
   async function create() {
     setState({ status: "sending" });
     try {
-      const res = await fetch("/api/alarm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner, watches }) });
+      const res = await fetch("/api/alarm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner, watches, rule }) });
       const json = (await res.json().catch(() => null)) as (AlarmCreated & { error?: string }) | null;
       if (!res.ok || !json?.deepLink) throw new Error(json?.error ?? `${res.status} ${res.statusText}`);
       setState({ status: "ready", link: json.deepLink });
+      setPanelOpen(false);
     } catch (e) {
       setState({ status: "error", error: e instanceof Error ? e.message : "could not create the alarm" });
     }
   }
 
   return (
-    <section aria-label="Telegram alarm" className="fixed inset-x-0 bottom-0 z-10 bg-dial border-t border-rule" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="mx-auto w-full max-w-[1440px] px-4 lg:px-8 py-3 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
-        <p className="text-[14px] text-ink-2">
-          <span className="fig text-ink">{watches.length}</span> wallet{watches.length === 1 ? "" : "s"} across{" "}
-          <span className="fig text-ink">{new Set(watches.map((w) => w.coin)).size}</span> of your positions. The alarm fires the moment one of them reduces.
-        </p>
-        <div className="flex items-center gap-3 flex-wrap">
-          <label className="flex items-center gap-2 text-[13px] text-ink-2">
-            When one reduces
-            <select
-              value={protectPct}
-              onChange={(e) => setProtectPct(Number(e.target.value))}
-              className="h-10 px-2 bg-paper border border-rule rounded-lg text-ink text-[13px]"
-            >
-              <option value={0}>just alert me</option>
-              <option value={25}>alert and cut my position 25%</option>
-              <option value={50}>alert and cut my position 50%</option>
-              <option value={100}>alert and close my position</option>
-            </select>
-          </label>
-          {state.status === "ready" && state.link ? (
-            <a href={state.link} target="_blank" rel="noreferrer" className="btn-primary h-10 px-5 inline-flex items-center text-[14px] no-underline whitespace-nowrap">
-              Open Telegram to arm it
-            </a>
-          ) : (
-            <button
-              onClick={create}
-              disabled={watches.length === 0 || state.status === "sending"}
-              className="btn-primary h-10 px-5 text-[14px] whitespace-nowrap disabled:cursor-not-allowed"
-            >
-              {state.status === "sending" ? "Creating alarm" : "Alert me on Telegram"}
-            </button>
-          )}
+    <>
+      <section aria-label="Telegram alarm" className="fixed inset-x-0 bottom-0 z-10 bg-dial border-t border-rule" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <div className="mx-auto w-full max-w-[1440px] px-4 lg:px-8 py-3 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+          <p className="text-[14px] text-ink-2">
+            <span className="fig text-ink">{watches.length}</span> wallet{watches.length === 1 ? "" : "s"} across{" "}
+            <span className="fig text-ink">{coins.size}</span> of your positions.
+          </p>
+          <div className="flex items-center gap-3 flex-wrap">
+            {state.status === "ready" && state.link ? (
+              <a href={state.link} target="_blank" rel="noreferrer" className="btn-primary h-10 px-5 inline-flex items-center text-[14px] no-underline whitespace-nowrap">
+                Open Telegram to arm it
+              </a>
+            ) : (
+              <button
+                onClick={() => setPanelOpen(true)}
+                disabled={watches.length === 0}
+                className="btn-primary h-10 px-5 text-[14px] whitespace-nowrap disabled:cursor-not-allowed"
+              >
+                Arm exit alarm
+              </button>
+            )}
+          </div>
         </div>
-      </div>
-      {state.status === "error" && (
-        <p role="alert" className="mx-auto w-full max-w-[1440px] px-4 lg:px-8 pb-3 -mt-1 text-[13px] text-late">
-          {state.error}
-        </p>
-      )}
-    </section>
+        {state.status === "error" && (
+          <p role="alert" className="mx-auto w-full max-w-[1440px] px-4 lg:px-8 pb-3 -mt-1 text-[13px] text-late">
+            {state.error}
+          </p>
+        )}
+      </section>
+      <ScenarioPanel
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        rule={rule}
+        onChange={setRule}
+        watchedCount={watches.length}
+        coin={previewCoin}
+        onArm={create}
+        arming={state.status === "sending"}
+      />
+    </>
   );
 }
 

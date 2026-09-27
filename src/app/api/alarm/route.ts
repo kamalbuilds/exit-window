@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createAlarmRecord, loadStore, saveStore, type Watch } from "@/lib/alarms";
+import { createAlarmRecord, loadStore, markLargestWatch, parseAlarmRule, saveStore, type Watch } from "@/lib/alarms";
 import { getBotUsername } from "@/lib/telegram";
 import type { AlarmCreated, Direction } from "@/lib/types";
 
@@ -9,12 +9,14 @@ interface AlarmRequestWatch {
   direction: Direction;
   label?: string | null;
   protect?: { reducePct: number } | null;
+  positionValueUsd?: number; // only used to resolve trigger "largest" at bind time; never stored
 }
 
 interface AlarmRequestBody {
   owner: string;
   watches: AlarmRequestWatch[];
   mirror?: boolean;
+  rule?: unknown;
 }
 
 export async function POST(req: Request) {
@@ -23,7 +25,12 @@ export async function POST(req: Request) {
     if (!body?.owner || !Array.isArray(body.watches) || body.watches.length === 0) {
       return NextResponse.json({ error: "owner and at least one watch are required" }, { status: 400 });
     }
-    const watches: Watch[] = body.watches.map((w) => ({
+    let rule;
+    if (body.rule !== undefined) {
+      rule = parseAlarmRule(body.rule) ?? undefined;
+      if (!rule) return NextResponse.json({ error: "rule is malformed" }, { status: 400 });
+    }
+    let watches: Watch[] = body.watches.map((w) => ({
       leader: w.leader,
       coin: w.coin,
       direction: w.direction,
@@ -33,7 +40,10 @@ export async function POST(req: Request) {
           ? { reducePct: w.protect.reducePct }
           : null,
     }));
-    const record = createAlarmRecord(body.owner, watches);
+    if (rule?.trigger === "largest") {
+      watches = markLargestWatch(watches, body.watches.map((w) => w.positionValueUsd));
+    }
+    const record = createAlarmRecord(body.owner, watches, rule);
     if (body.mirror) record.mirror = true;
 
     const store = await loadStore();
