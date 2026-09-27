@@ -400,7 +400,8 @@ export function formatOnboardingMessage(
     return "No watches bound to this code yet. Create a new alarm from the app.";
   }
   const blocks = watches.map((w) => formatOneOnboardingWatch(w, appUrl));
-  const smartAlertLines = smartAlerts.map(formatSmartAlertLine);
+  // Only armed Nansen alerts are worth a line; a coin Nansen cannot watch on-chain is simply not mentioned.
+  const smartAlertLines = smartAlerts.filter((a) => a.status !== "skipped").map(formatSmartAlertLine);
   return (
     `Alarm armed on ${watches.length} watch${watches.length === 1 ? "" : "es"}.\n\n` +
     blocks.join("\n\n") +

@@ -459,7 +459,7 @@ describe("formatOnboardingMessage", () => {
     expect(msg).toContain("not currently open on ETH");
   });
 
-  it("appends the smart-alert mention for a created alert and the skip reason for a skipped one", () => {
+  it("mentions armed Nansen alerts and leaves skipped coins out of the chat", () => {
     const msg = formatOnboardingMessage(
       [
         {
@@ -478,7 +478,8 @@ describe("formatOnboardingMessage", () => {
       ],
     );
     expect(msg).toContain("Nansen will also message you directly if Smart Money pulls out of ETH on-chain.");
-    expect(msg).toContain("Nansen on-chain alert skipped for xyz:BRENTOIL: no resolvable spot token");
+    expect(msg).not.toContain("skipped");
+    expect(msg).not.toContain("xyz:BRENTOIL");
   });
 });
 
