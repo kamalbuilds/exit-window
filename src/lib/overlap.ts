@@ -7,7 +7,7 @@ import { fetchAddressLabels, fetchTgmPerpPositions, type RawCompanion } from "./
 import type { Companion, OverlapRow } from "./types";
 
 const MAX_COMPANIONS = 5;
-const MIN_SMART_MONEY = 3; // below this, top up with whale so the row isn't sparse
+const MIN_SMART_MONEY = 2; // below this, top up with whale (a paid call) so the row isn't sparse
 const FETCH_COMPANIONS = MAX_COMPANIONS + 3; // buffer: excluding the user should still leave 5
 
 // profiler/address/labels is a per-address call, so cap how many a single /api/overlap request

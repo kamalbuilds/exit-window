@@ -31,7 +31,7 @@ const TTL_MS: Record<string, number> = {
   "perp-leaderboard": 6 * 60 * 60_000,
   "smart-money/perp-trades": 5 * 60_000,
   "profiler/perp-positions": 30_000,
-  "tgm/perp-positions": 10 * 60_000,
+  "tgm/perp-positions": 30 * 60_000,
   "profiler/address/labels": 24 * 60 * 60_000,
 };
 
@@ -61,6 +61,10 @@ function hashKey(key: string): string {
 
 function cacheDir(): string {
   if (process.env.NANSEN_CACHE_DIR) return process.env.NANSEN_CACHE_DIR;
+  // Without this, a test run writes real disk-cache entries into the same .cache/nansen a
+  // dev server reads from, and a later test run can then silently serve a stale hit instead
+  // of exercising the network path it meant to test.
+  if (process.env.VITEST) return "/tmp/nansen-cache-test";
   if (process.env.VERCEL) return "/tmp/nansen-cache";
   return path.join(process.cwd(), ".cache", "nansen");
 }
@@ -128,6 +132,7 @@ export function currentNetworkCallCount(): number {
 // ---------------------------------------------------------------------------
 
 function callLogPath(): string {
+  if (process.env.VITEST) return "/tmp/nansen-calls-test.jsonl";
   if (process.env.VERCEL) return "/tmp/nansen-calls.jsonl";
   return path.join(process.cwd(), "data", "nansen-calls.jsonl");
 }
@@ -227,6 +232,20 @@ export async function readCallLog(): Promise<CallLogEntry[]> {
 
 export class NansenAuthError extends Error {}
 
+/** The Nansen account is out of credits (403 insufficient_credits). Never retried - retrying an
+ * exhausted key only burns more failed calls. Trips a process-wide latch so a burst of parallel
+ * requests stops hitting the network at all for a few minutes, and callers are told to fall back
+ * to cache rather than see a raw 403. */
+export class NansenCreditsError extends Error {
+  constructor(endpoint: string, detail: string) {
+    super(`Nansen ${endpoint} credits exhausted: ${detail}`);
+    this.name = "NansenCreditsError";
+  }
+}
+
+const CREDITS_LATCH_MS = 5 * 60_000;
+let creditsExhaustedUntil = 0;
+
 /** All retries exhausted against a transient condition (network timeout, persistent 429/5xx).
  * The caller never sees a bare thrown Error or a silently empty/null result for this case -
  * route handlers match on this type and answer 503 rather than 502 or a fabricated empty report. */
@@ -289,11 +308,15 @@ async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Pro
       "NANSEN_API_KEY is not set. Add it to .env (never commit it, never log its value).",
     );
   }
+  if (Date.now() < creditsExhaustedUntil) {
+    throw new NansenCreditsError(endpoint, "credits exhausted, latched until retry window elapses");
+  }
+
   const method = opts.method ?? "POST";
   let url = `https://api.nansen.ai/api/v1/${endpoint}`;
   if (opts.query) url += `?${new URLSearchParams(opts.query).toString()}`;
 
-  const maxAttempts = opts.retries ?? 2;
+  const maxAttempts = opts.retries ?? 1;
   let lastError: Error = new Error(`Nansen ${endpoint} failed`);
   let lastRetryAfterSec = 5;
 
@@ -339,6 +362,19 @@ async function rawFetch(endpoint: string, body: Json, opts: RequestOptions): Pro
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
+        if (res.status === 403) {
+          const code = (() => {
+            try {
+              return (JSON.parse(text) as { code?: string }).code;
+            } catch {
+              return undefined;
+            }
+          })();
+          if (code === "insufficient_credits") {
+            creditsExhaustedUntil = Date.now() + CREDITS_LATCH_MS;
+            throw new NansenCreditsError(endpoint, text);
+          }
+        }
         if (res.status === 401 || res.status === 403) {
           throw new NansenAuthError(`Nansen auth failed (${res.status}): ${text}`);
         }
@@ -678,6 +714,7 @@ export async function fetchTgmPerpPositions(
         }),
       );
     },
+    { retries: 0 }, // biggest spender in the overlap fan-out; a failed call skips, it never retries
   );
 }
 
