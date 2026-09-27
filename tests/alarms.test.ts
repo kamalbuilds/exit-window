@@ -26,7 +26,7 @@ import {
   type Watch,
 } from "../src/lib/alarms";
 import type { MirrorResult } from "../src/lib/mirror";
-import type { OpenPosition, PositionChange, WalletReport } from "../src/lib/types";
+import type { ExitDna, OpenPosition, PositionChange, WalletReport } from "../src/lib/types";
 
 const AT = 1_700_000_000_000;
 
@@ -299,7 +299,7 @@ describe("formatProtectionLine", () => {
 });
 
 describe("readExitDna", () => {
-  function baseReport(): WalletReport {
+  function baseReport(exitDna: ExitDna | null = null): WalletReport {
     return {
       address: "0xabc",
       label: null,
@@ -315,6 +315,7 @@ describe("readExitDna", () => {
       realizedPnlUsd: null,
       unrealizedPnlUsd: null,
       episodes: [],
+      exitDna,
       openPositions: [],
       nansenCalls: 0,
       backtestEligible: 0,
@@ -322,18 +323,58 @@ describe("readExitDna", () => {
     };
   }
 
-  it("returns null when the report has no exitDna field at all", () => {
-    expect(readExitDna(baseReport())).toBeNull();
+  it("returns null when the report's exitDna is null", () => {
+    expect(readExitDna(baseReport(null))).toBeNull();
   });
 
-  it("reads a string exitDna field when the report carries one", () => {
-    const report = { ...baseReport(), exitDna: "Scaler: usually 3 reduces before flat." } as WalletReport;
-    expect(readExitDna(report)).toBe("Scaler: usually 3 reduces before flat.");
+  it("formats a scaler ExitDna into a sentence with the median window", () => {
+    const dna: ExitDna = {
+      sample: 6,
+      firstReduceToFlatMedianMin: 45,
+      fullExitAfterFirstReducePct: 10,
+      medianClips: 3,
+      firstReduceAtPnlPct: 4.2,
+      style: "scaler",
+    };
+    expect(readExitDna(baseReport(dna))).toBe(
+      "Scaler: usually takes 3 clips to get flat. Median 45 min from first reduce to flat.",
+    );
   });
 
-  it("ignores a non-string or blank exitDna instead of crashing", () => {
-    expect(readExitDna({ ...baseReport(), exitDna: 42 } as WalletReport)).toBeNull();
-    expect(readExitDna({ ...baseReport(), exitDna: "   " } as WalletReport)).toBeNull();
+  it("formats a nuclear ExitDna without a window sentence when the window is unmeasured", () => {
+    const dna: ExitDna = {
+      sample: 4,
+      firstReduceToFlatMedianMin: null,
+      fullExitAfterFirstReducePct: 90,
+      medianClips: 1,
+      firstReduceAtPnlPct: null,
+      style: "nuclear",
+    };
+    expect(readExitDna(baseReport(dna))).toBe("Nuclear exiter: usually flat in one clip (90% of the time).");
+  });
+
+  it("formats trimmer and mixed styles", () => {
+    const trimmer: ExitDna = {
+      sample: 5,
+      firstReduceToFlatMedianMin: 20,
+      fullExitAfterFirstReducePct: 5,
+      medianClips: 4,
+      firstReduceAtPnlPct: 1.1,
+      style: "trimmer",
+    };
+    expect(readExitDna(baseReport(trimmer))).toBe(
+      "Trimmer: usually trims rather than closes on the first reduce. Median 20 min from first reduce to flat.",
+    );
+
+    const mixed: ExitDna = {
+      sample: 5,
+      firstReduceToFlatMedianMin: null,
+      fullExitAfterFirstReducePct: 50,
+      medianClips: 2,
+      firstReduceAtPnlPct: null,
+      style: "mixed",
+    };
+    expect(readExitDna(baseReport(mixed))).toBe("Mixed exit style: no strong single pattern.");
   });
 });
 

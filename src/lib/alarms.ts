@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Direction, OpenPosition, PositionChange, WalletReport } from "./types";
+import type { Direction, ExitDna, OpenPosition, PositionChange, WalletReport } from "./types";
 import type { MirrorResult } from "./mirror";
 
 export interface ProtectRule {
@@ -276,13 +276,30 @@ export function formatProtectionLine(result: MirrorResult): string {
 }
 
 // ---------------------------------------------------------------------------
-// Exit DNA: WalletReport does not declare this field yet (the report lane may add it later).
-// Read it defensively so this file keeps working whichever direction lands first.
+// Exit DNA: distills a wallet's WalletReport.exitDna into one display sentence.
 // ---------------------------------------------------------------------------
 
+function exitDnaStyleSentence(dna: ExitDna): string {
+  switch (dna.style) {
+    case "nuclear":
+      return `Nuclear exiter: usually flat in one clip (${Math.round(dna.fullExitAfterFirstReducePct)}% of the time).`;
+    case "scaler":
+      return `Scaler: usually takes ${Math.round(dna.medianClips)} clips to get flat.`;
+    case "trimmer":
+      return "Trimmer: usually trims rather than closes on the first reduce.";
+    default:
+      return "Mixed exit style: no strong single pattern.";
+  }
+}
+
+/** Turns the wallet's own closed-episode history into one sentence, or null when there isn't
+ * enough sample to say anything (WalletReport.exitDna is null in that case). */
 export function readExitDna(report: WalletReport): string | null {
-  const value = (report as unknown as { exitDna?: unknown }).exitDna;
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
+  const dna = report.exitDna;
+  if (!dna) return null;
+  const windowText =
+    dna.firstReduceToFlatMedianMin === null ? "" : ` Median ${fmtMin(dna.firstReduceToFlatMedianMin)} from first reduce to flat.`;
+  return `${exitDnaStyleSentence(dna)}${windowText}`;
 }
 
 // ---------------------------------------------------------------------------
