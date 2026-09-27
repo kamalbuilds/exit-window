@@ -565,3 +565,15 @@ describe("whyCacheKey", () => {
     expect(whyCacheKey("0xleader", "STRK", at)).not.toBe(whyCacheKey("0xleader", "ETH", at));
   });
 });
+
+describe("readExitDna with exit risk", () => {
+  it("leads with the holder risk verdict when the report carries one", () => {
+    const base = {
+      exitDna: { style: "nuclear", medianClips: 1, firstReduceToFlatMedianMin: 0.5, fullExitAfterFirstReducePct: 100, firstReduceAtPnlPct: null, sample: 3 },
+      medianWindowMin: 163,
+    } as unknown as WalletReport;
+    const withRisk = { ...base, exitRisk: { level: "high", fullExitPct: 100, minutesToFlat: 0.5, medianWindowMin: 163, sample: 3, sentence: "" } } as unknown as WalletReport;
+    expect(readExitDna(withRisk)).toMatch(/^Holder risk HIGH\. /);
+    expect(readExitDna(base)).not.toMatch(/^Holder risk/);
+  });
+});

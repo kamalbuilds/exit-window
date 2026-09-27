@@ -10,6 +10,7 @@ import { ErrorState } from "@/components/States";
 import { formatAgo, formatDate, formatMinutes, formatPct, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
 import { ExitStrip, StripAxis } from "@/components/report/ExitStrip";
+import { ExitRiskPanel } from "@/components/report/ExitRiskPanel";
 import { FollowRail } from "@/components/report/FollowRail";
 import { LatencyLadder } from "@/components/report/LatencyLadder";
 import { Positions } from "@/components/report/Positions";
@@ -135,6 +136,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
 
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-6 items-start">
         <div className="lg:col-span-8 flex flex-col gap-6 min-w-0">
+          <ExitRiskPanel risk={report.exitRisk} followLate={report.followLateSummary} />
           {report.exitDna && <ExitDnaBlock dna={report.exitDna} />}
           {report.alarmReplay && <AlarmReplayBlock ar={report.alarmReplay} />}
 

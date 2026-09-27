@@ -332,7 +332,7 @@ export function computeExitRisk(exitDna: ExitDna | null, medianWindowMin: number
       ? "Not enough closed exits yet to size holder risk."
       : `When this wallet starts selling it usually ${fullExitPct >= 50 ? "finishes" : "trims"}: ` +
         `${fullExitPct.toFixed(0)}% of first reduces became full exits` +
-        (minutesToFlat !== null ? `, median ${minutesToFlat.toFixed(0)}m to flat` : "") +
+        (minutesToFlat !== null ? (minutesToFlat < 1 ? ", usually flat within a minute" : `, median ${minutesToFlat.toFixed(0)}m to flat`) : "") +
         `. Holder risk: ${level}.`;
 
   return { level, fullExitPct, minutesToFlat, medianWindowMin, sample, sentence };

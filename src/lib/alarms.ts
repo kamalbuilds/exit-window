@@ -295,6 +295,13 @@ function exitDnaStyleSentence(dna: ExitDna): string {
 /** Turns the wallet's own closed-episode history into one sentence, or null when there isn't
  * enough sample to say anything (WalletReport.exitDna is null in that case). */
 export function readExitDna(report: WalletReport): string | null {
+  const sentence = readExitDnaSentence(report);
+  const risk = report.exitRisk;
+  if (!sentence) return null;
+  return risk && risk.level !== "unknown" ? `Holder risk ${risk.level.toUpperCase()}. ${sentence}` : sentence;
+}
+
+function readExitDnaSentence(report: WalletReport): string | null {
   const dna = report.exitDna;
   if (!dna) return null;
   const windowText =
