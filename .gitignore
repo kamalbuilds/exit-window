@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Nansen disk cache (network responses only; committed seed lives in data/nansen-seed)
+/.cache/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
