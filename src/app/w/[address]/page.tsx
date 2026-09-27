@@ -142,7 +142,7 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
           {windows.length > 0 && (
             <div>
               <p className="label mb-2">Price and exits</p>
-              <PositionChart coin={windows[0].coin} address={address} height={360} />
+              <PositionChart coin={windows[0].coin} address={address} height={360} entryLabel="This wallet" />
             </div>
           )}
 
