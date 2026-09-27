@@ -51,6 +51,9 @@ progress/raw/aa-data/
 # Persisted fills per address (incremental Nansen fetch cache; not secret, not seed data)
 /data/fills/
 
+# Sentinel's live reduce/close event log (runtime output, not seed data)
+/data/live-exits.jsonl
+
 # Research and planning notes stay local (competitor reviews, win conditions, internal spec)
 /progress/
 /docs/WIN-CONDITIONS.md

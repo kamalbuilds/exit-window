@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
-import { fetchSmartMoneyPerpTrades, NansenAuthError } from "@/lib/nansen";
+import type { FeedItem } from "@/components/feed";
+import { fetchSmartMoneyPerpTrades } from "@/lib/nansen";
+import { mergeFeed, readEvents } from "@/lib/sentinel";
 
 /** src/components/FeedStrip.tsx reads the raw snake_case shape from BUILD-SPEC's
  * smart-money/perp-trades directly (it predates this route); map back to that shape here
  * rather than the camelCase SmartMoneyPerpTrade nansen.ts normalizes to internally. */
 export async function GET() {
+  // Nansen's smart-money/perp-trades freezes when its credits run out (nansenCall still falls
+  // back to a stale cached response when one exists) - the sentinel's own live-exits.jsonl fills
+  // the gap either way, so a Nansen failure degrades this feed rather than failing it outright.
+  let nansenFeed: FeedItem[] = [];
   try {
     const { data } = await fetchSmartMoneyPerpTrades(24, 50);
-    const feed = data.map((t) => ({
+    nansenFeed = data.map((t) => ({
       timestamp: t.at,
       trader_address: t.traderAddress,
       trader_address_label: t.traderLabel || null,
@@ -15,13 +21,13 @@ export async function GET() {
       side: t.side,
       action: t.action,
       price: t.priceUsd,
-      size: t.size,
       value_usd: t.valueUsd,
     }));
-    return NextResponse.json(feed);
   } catch (err) {
-    if (err instanceof NansenAuthError) return NextResponse.json({ error: err.message }, { status: 401 });
-    const message = err instanceof Error ? err.message : "feed request failed";
-    return NextResponse.json({ error: message }, { status: 502 });
+    console.error("feed: Nansen smart-money/perp-trades unavailable, serving sentinel-only feed:", err instanceof Error ? err.message : err);
   }
+
+  const liveEvents = await readEvents();
+  const feed = mergeFeed(nansenFeed, liveEvents);
+  return NextResponse.json(feed);
 }
