@@ -37,112 +37,173 @@ function describe(r?: Record<string, unknown>): string {
   return parts.join(" · ");
 }
 
-/** Public proof of every Nansen API call this project made, read from the committed call log. */
+/** Public proof of every Nansen API call this product made, read from the committed call log. */
 export default function CallsPage() {
   const { data, error, loading, refresh } = usePoll<CallsPayload>("/api/calls", 30_000);
   const s = data?.summary;
   const maxEp = s ? Math.max(1, ...s.byEndpoint.map((e) => e.network + e.hits)) : 1;
 
   return (
-    <main className="mx-auto w-full max-w-[1320px] px-4 sm:px-8 flex-1 pb-16">
-      <header className="pt-10 pb-8 border-b border-ink grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-8 items-end">
-        <div className="lg:col-span-7">
-          <h1 className="display text-[clamp(34px,5vw,56px)]">Every Nansen call this product made.</h1>
-          <p className="mt-4 text-[17px] text-ink-2 max-w-[60ch]">
-            Appended by the server on every request to the Nansen API and committed to the repository as{" "}
-            <span className="fig text-[15px]">data/nansen-calls.jsonl</span>. Cache hits are listed too, so you can see what was
-            paid for once and reused. No key or header value is ever written.
-          </p>
-        </div>
-        {s && (
-          <dl className="lg:col-span-5 grid grid-cols-3 gap-6 border-t border-ink pt-4">
-            <div>
-              <dt className="label">Paid calls</dt>
-              <dd className="display text-[40px] mt-1">{s.network}</dd>
-            </div>
-            <div>
-              <dt className="label">Served from cache</dt>
-              <dd className="display text-[40px] mt-1">{s.hits}</dd>
-            </div>
-            <div>
-              <dt className="label">Success</dt>
-              <dd className="display text-[40px] mt-1">{Math.round(s.successRate)}%</dd>
-            </div>
-          </dl>
-        )}
-      </header>
+    <main className="px-4 lg:px-8 py-6 max-w-[1440px] w-full">
+      <h1 className="display text-[24px]">Nansen API calls</h1>
+      <p className="mt-1 text-ink-2">Every request this product made to the Nansen API, paid or served from cache.</p>
 
       {error ? (
-        <div className="mt-8">
+        <div className="mt-6">
           <ErrorState message={`The call log did not load (${error}).`} onRetry={refresh} />
         </div>
       ) : loading && !data ? (
-        <div className="mt-8">
+        <div className="mt-6">
           <LoadingRows label="call log" rows={6} />
         </div>
-      ) : data ? (
-        <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-12 gap-x-12 gap-y-10 pt-10">
-          <section className="lg:col-span-5">
-            <h2 className="display text-[26px] mb-4">By endpoint</h2>
-            <ol className="border-t border-ink">
-              {data.summary.byEndpoint.map((e) => (
-                <li key={e.endpoint} className="py-3 border-b border-rule">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="fig text-[13px] text-ink truncate">{e.endpoint}</span>
-                    <span className="fig text-[13px] text-ink-2 whitespace-nowrap">
-                      {e.network} paid · {e.hits} cached
-                    </span>
-                  </div>
-                  <div className="mt-2 h-2 flex bg-bezel" aria-hidden="true">
-                    <span className="h-full bg-ink" style={{ width: `${(e.network / maxEp) * 100}%` }} />
-                    <span className="h-full bg-window" style={{ width: `${(e.hits / maxEp) * 100}%` }} />
-                  </div>
-                </li>
-              ))}
-            </ol>
-            {data.summary.first && data.summary.last && (
-              <p className="mt-4 text-[13px] text-ink-3">
-                From <span className="fig">{data.summary.first.replace("T", " ").slice(0, 19)}</span> to{" "}
-                <span className="fig">{data.summary.last.replace("T", " ").slice(0, 19)}</span> UTC.
-              </p>
-            )}
+      ) : data && s ? (
+        <>
+          <section aria-label="Call totals" className="panel mt-6 px-5 py-4">
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+              <div>
+                <dt className="label">Paid calls</dt>
+                <dd className="fig mt-1 text-[20px] text-ink">{s.network}</dd>
+              </div>
+              <div>
+                <dt className="label">Served from cache</dt>
+                <dd className="fig mt-1 text-[20px] text-ink">{s.hits}</dd>
+              </div>
+              <div>
+                <dt className="label">Success rate</dt>
+                <dd className="fig mt-1 text-[20px] text-ink">{Math.round(s.successRate)}%</dd>
+              </div>
+              <div>
+                <dt className="label">Endpoints</dt>
+                <dd className="fig mt-1 text-[20px] text-ink">{s.byEndpoint.length}</dd>
+              </div>
+            </dl>
           </section>
 
-          <section className="lg:col-span-7 min-w-0">
-            <h2 className="display text-[26px] mb-4">Latest calls</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-left">
-                <thead>
-                  <tr className="border-t border-b border-ink label">
-                    <th className="py-2 font-medium">Time (UTC)</th>
-                    <th className="py-2 font-medium">Endpoint</th>
-                    <th className="py-2 font-medium">Request</th>
-                    <th className="py-2 font-medium text-right">Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.recent.map((c, i) => (
-                    <tr key={`${c.ts}-${i}`} className="border-b border-rule align-baseline">
-                      <td className="py-2 fig text-[12px] text-ink-3 whitespace-nowrap">{c.ts.slice(11, 19)}</td>
-                      <td className="py-2 fig text-[12px] text-ink pr-3">{c.endpoint}</td>
-                      <td className="py-2 fig text-[12px] text-ink-2 pr-3">{describe(c.requestSummary)}</td>
-                      <td className="py-2 fig text-[12px] text-right whitespace-nowrap">
-                        {c.cache === "hit" ? (
-                          <span className="text-ink-3">cache {c.source ?? ""}</span>
-                        ) : (
-                          <span className={c.status === 0 || (c.status ?? 0) >= 400 ? "text-late" : "text-lume"}>
-                            {c.status === 0 ? "timeout" : (c.status ?? "")} {c.rows !== undefined && c.rows !== null ? `· ${c.rows} rows` : ""}{" "}
-                            {c.latencyMs !== undefined ? `· ${c.latencyMs}ms` : ""}
-                          </span>
-                        )}
-                      </td>
+          <div className="mt-6 grid items-start gap-6 xl:grid-cols-2">
+            <section aria-label="Calls by endpoint" className="panel p-5">
+              <h2 className="display text-[16px]">By endpoint</h2>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[420px] table-fixed text-left">
+                  <colgroup>
+                    <col />
+                    <col className="w-14" />
+                    <col className="w-16" />
+                    <col className="w-28" />
+                  </colgroup>
+                  <thead>
+                    <tr className="bg-bezel">
+                      <th scope="col" className="label py-2 pl-3 pr-2 font-medium">
+                        Endpoint
+                      </th>
+                      <th scope="col" className="label py-2 px-2 font-medium text-right">
+                        Paid
+                      </th>
+                      <th scope="col" className="label py-2 px-2 font-medium text-right">
+                        Cached
+                      </th>
+                      <th scope="col" className="label py-2 pl-2 pr-3 font-medium text-right">
+                        Mix
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
+                  </thead>
+                  <tbody>
+                    {s.byEndpoint.map((e) => (
+                      <tr
+                        key={e.endpoint}
+                        className="border-b border-rule transition-[background-color] duration-150 last:border-b-0 hover:bg-bezel"
+                      >
+                        <td className="py-2.5 pl-3 pr-2">
+                          <span className="fig block truncate text-[13px] text-ink">{e.endpoint}</span>
+                        </td>
+                        <td className="fig whitespace-nowrap py-2.5 px-2 text-right text-[13px] text-ink-2">
+                          {e.network}
+                        </td>
+                        <td className="fig whitespace-nowrap py-2.5 px-2 text-right text-[13px] text-ink-2">
+                          {e.hits}
+                        </td>
+                        <td className="py-2.5 pl-2 pr-3">
+                          <span
+                            className="ml-auto flex h-1 w-24 overflow-hidden rounded-full bg-bezel"
+                            role="img"
+                            aria-label={`${e.network} paid, ${e.hits} cached`}
+                          >
+                            <span className="h-full bg-lume" style={{ width: `${(e.network / maxEp) * 100}%` }} />
+                            <span className="h-full bg-rule" style={{ width: `${(e.hits / maxEp) * 100}%` }} />
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {s.first && s.last && (
+                <p className="mt-4 text-[13px] text-ink-3">
+                  From <span className="fig">{s.first.replace("T", " ").slice(0, 19)}</span> to{" "}
+                  <span className="fig">{s.last.replace("T", " ").slice(0, 19)}</span> UTC.
+                </p>
+              )}
+            </section>
+
+            <section aria-label="Latest calls" className="panel p-5">
+              <h2 className="display text-[16px]">Latest calls</h2>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[560px] text-left">
+                  <thead>
+                    <tr className="bg-bezel">
+                      <th scope="col" className="label whitespace-nowrap py-2 pl-3 pr-2 font-medium">
+                        Time
+                      </th>
+                      <th scope="col" className="label py-2 px-2 font-medium">
+                        Endpoint
+                      </th>
+                      <th scope="col" className="label py-2 px-2 font-medium">
+                        Request
+                      </th>
+                      <th scope="col" className="label py-2 pl-2 pr-3 font-medium text-right">
+                        Result
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recent.map((c, i) => (
+                      <tr
+                        key={`${c.ts}-${i}`}
+                        className="border-b border-rule transition-[background-color] duration-150 last:border-b-0 hover:bg-bezel"
+                      >
+                        <td className="fig whitespace-nowrap py-2.5 pl-3 pr-2 text-[12px] text-ink-3">
+                          {c.ts.slice(11, 19)}
+                        </td>
+                        <td className="py-2.5 px-2 pr-3">
+                          <span className="fig block max-w-[180px] truncate text-[13px] text-ink">{c.endpoint}</span>
+                        </td>
+                        <td className="py-2.5 px-2 pr-3">
+                          <span className="fig block max-w-[180px] truncate text-[12px] text-ink-2">
+                            {describe(c.requestSummary)}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap py-2.5 pl-2 pr-3 text-right">
+                          {c.cache === "hit" ? (
+                            <span className="chip chip-mute fig">cache {c.source ?? "disk"}</span>
+                          ) : (
+                            <span
+                              className={`chip fig ${
+                                c.status === 0 || (c.status ?? 0) >= 400 ? "chip-late" : "chip-lume"
+                              }`}
+                            >
+                              {c.status === 0 ? "timeout" : (c.status ?? "")}
+                              {c.rows !== undefined && c.rows !== null ? ` · ${c.rows} rows` : ""}{" "}
+                              {c.latencyMs !== undefined ? ` · ${c.latencyMs}ms` : ""}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </>
       ) : null}
     </main>
   );

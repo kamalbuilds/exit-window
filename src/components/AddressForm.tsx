@@ -41,13 +41,13 @@ export function AddressForm({
           placeholder="0x Hyperliquid address"
           spellCheck={false}
           autoComplete="off"
-          className="fig flex-none sm:flex-1 min-w-0 h-11 bg-dial border border-ink-3 rounded-[var(--radius-control)] px-3 text-[14px] text-ink placeholder:text-ink-3 transition-[border-color] duration-150 focus:border-ink"
+          className="fig h-10 flex-none sm:flex-1 min-w-0 bg-paper border border-rule rounded-lg px-3 text-[14px] text-ink placeholder:text-ink-3 transition-[border-color] duration-150 focus:border-accent"
           aria-invalid={touched && !valid}
           aria-describedby={touched && !valid ? "wallet-error" : undefined}
         />
         <button
           type="submit"
-          className="h-11 px-5 bg-ink text-paper font-medium text-[15px] rounded-[var(--radius-control)] whitespace-nowrap transition-[background-color] duration-150 hover:bg-ink-2"
+          className="btn-primary h-10 px-5 text-[14px] whitespace-nowrap active:scale-[0.97]"
         >
           {cta}
         </button>
