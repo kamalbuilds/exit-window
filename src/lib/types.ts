@@ -27,6 +27,7 @@ export interface Episode {
   direction: Direction;
   openedAt: number;
   closedAt: number | null; // null while still open
+  observedOpen: boolean; // false when the position was already open at the start of the lookback (entries incomplete)
   entries: Tranche[];
   exits: Tranche[]; // every reduce, including the final close
   peakSize: number;
