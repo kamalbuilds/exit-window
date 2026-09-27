@@ -1,6 +1,6 @@
 // Server-only typed client for the Nansen API, with a two-layer cache (memory + disk) so
 // development and the deployed demo never pay Nansen credits twice for the same request.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Companion, Direction, Fill, LeaderRow, OpenPosition } from "./types";
@@ -59,12 +59,18 @@ function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+// A fixed path (even under /tmp) would let one `vitest run` invocation's leftover disk-cache
+// entries silently serve a later, unrelated invocation - proven by running the suite twice in
+// a row and watching a "network miss" assertion go stale. One random directory per process
+// keeps every test run (and every vitest worker) isolated from every other.
+const testCacheDir = process.env.VITEST ? path.join("/tmp", `nansen-cache-test-${randomUUID()}`) : null;
+
 function cacheDir(): string {
   if (process.env.NANSEN_CACHE_DIR) return process.env.NANSEN_CACHE_DIR;
   // Without this, a test run writes real disk-cache entries into the same .cache/nansen a
   // dev server reads from, and a later test run can then silently serve a stale hit instead
   // of exercising the network path it meant to test.
-  if (process.env.VITEST) return "/tmp/nansen-cache-test";
+  if (testCacheDir) return testCacheDir;
   if (process.env.VERCEL) return "/tmp/nansen-cache";
   return path.join(process.cwd(), ".cache", "nansen");
 }
