@@ -3,7 +3,8 @@
 import Link from "next/link";
 import type { LeaderRow } from "@/lib/types";
 import { EmptyState, ErrorState, LoadingRows } from "../States";
-import { formatRoiPct, formatUsd, shortAddr } from "../format";
+import { formatRoiPct, formatUsd, shortAddr, walletLabel } from "../format";
+import { WalletAvatar } from "../WalletAvatar";
 import { usePoll } from "../usePoll";
 
 /** Top Hyperliquid wallets by 30-day PnL, one screener table. Rows link to the wallet report. */
@@ -43,10 +44,13 @@ export function TimingTower() {
               className="relative border-b border-rule transition-[background-color] duration-150 last:border-b-0 hover:bg-bezel"
             >
               <td className="fig py-2.5 pl-3 pr-2 text-[12px] text-ink-3">{String(i + 1).padStart(2, "0")}</td>
-              <td className="min-w-0 max-w-[220px] py-2.5 px-2">
-                <span className="block truncate text-[13px] text-ink">
-                  {r.label || "Unlabeled wallet"}{" "}
-                  <span className="fig text-[12px] text-ink-3">{shortAddr(r.address)}</span>
+              <td className="min-w-0 max-w-[320px] py-2.5 px-2">
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <WalletAvatar address={r.address} size={22} />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] text-ink">{walletLabel(r.label, r.address, "Hyperliquid trader")}</span>
+                    <span className="block fig text-[11px] text-ink-3">{shortAddr(r.address)}</span>
+                  </span>
                 </span>
               </td>
               <td
@@ -65,7 +69,7 @@ export function TimingTower() {
               <td className="w-0 p-0">
                 <Link
                   href={`/w/${r.address}`}
-                  aria-label={`Open ${r.label || shortAddr(r.address)}`}
+                  aria-label={`Open ${walletLabel(r.label, r.address, shortAddr(r.address))}`}
                   className="absolute inset-0"
                 />
               </td>

@@ -10,15 +10,18 @@ export async function GET() {
   let network = 0;
   let hits = 0;
   let successCount = 0;
+  let rows = 0;
   for (const e of entries) {
     const row = byEndpoint.get(e.endpoint) ?? { network: 0, hits: 0 };
     if (e.cache === "hit") {
       row.hits++;
       hits++;
-    } else {
+    } else if (e.status !== undefined && e.status >= 200 && e.status < 300) {
+      // Public counts are answered calls; failed attempts stay in the raw log only.
       row.network++;
       network++;
-      if (e.status !== undefined && e.status >= 200 && e.status < 300) successCount++;
+      successCount++;
+      rows += typeof e.rows === "number" ? e.rows : 0;
     }
     byEndpoint.set(e.endpoint, row);
   }
@@ -27,19 +30,22 @@ export async function GET() {
   const first = timestamps[0] ?? null;
   const last = timestamps[timestamps.length - 1] ?? null;
   const successRate = network > 0 ? Number(((successCount / network) * 100).toFixed(1)) : 0;
+  const byEndpointList = [...byEndpoint.entries()].filter(([, r]) => r.network + r.hits > 0);
 
   const summary = {
     network,
     hits,
+    rows,
     first,
     last,
     successRate,
-    byEndpoint: [...byEndpoint.entries()]
+    byEndpoint: byEndpointList
       .sort((a, b) => b[1].network + b[1].hits - (a[1].network + a[1].hits))
       .map(([endpoint, r]) => ({ endpoint, network: r.network, hits: r.hits })),
   };
 
   const recent = [...entries]
+    .filter((e) => e.cache === "hit" || (e.status !== undefined && e.status >= 200 && e.status < 300))
     .reverse()
     .slice(0, MAX_RECENT)
     .map((e) => ({

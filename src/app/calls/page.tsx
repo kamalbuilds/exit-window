@@ -21,6 +21,7 @@ interface CallsPayload {
     first: string | null;
     last: string | null;
     successRate: number;
+    rows?: number;
     byEndpoint: { endpoint: string; network: number; hits: number }[];
   };
   recent: CallLine[];
@@ -69,8 +70,8 @@ export default function CallsPage() {
                 <dd className="fig mt-1 text-[20px] text-ink">{s.network + s.hits}</dd>
               </div>
               <div>
-                <dt className="label">Success rate</dt>
-                <dd className="fig mt-1 text-[20px] text-ink">{Math.round(s.successRate)}%</dd>
+                <dt className="label">Rows of Nansen data</dt>
+                <dd className="fig mt-1 text-[20px] text-ink">{(s.rows ?? 0).toLocaleString()}</dd>
               </div>
               <div>
                 <dt className="label">Endpoints</dt>
