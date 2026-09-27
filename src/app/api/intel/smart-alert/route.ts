@@ -5,19 +5,20 @@ import type { Direction } from "@/lib/types";
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
-    chatId?: string;
+    code?: string;
     coin?: string;
     direction?: string;
   };
-  const { chatId, coin, direction } = body;
-  // Never create an alert without an explicit chatId: it delivers straight to that Telegram chat.
-  if (!chatId) return NextResponse.json({ error: "chatId is required" }, { status: 400 });
+  const { code, coin, direction } = body;
+  // Never create an alert without an explicit alarm code: delivery is a signed webhook keyed by
+  // ?alarm=<code> (src/app/api/nansen-webhook), which maps back to the bound Telegram chat.
+  if (!code) return NextResponse.json({ error: "code is required" }, { status: 400 });
   if (!coin) return NextResponse.json({ error: "coin is required" }, { status: 400 });
   if (direction !== "long" && direction !== "short") {
     return NextResponse.json({ error: "direction must be 'long' or 'short'" }, { status: 400 });
   }
   try {
-    const created = await createSmartAlert({ chatId, coin, direction: direction as Direction });
+    const created = await createSmartAlert({ code, coin, direction: direction as Direction });
     return NextResponse.json(created);
   } catch (err) {
     if (err instanceof NansenAuthError) return NextResponse.json({ error: err.message }, { status: 401 });

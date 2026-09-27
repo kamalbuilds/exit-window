@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildCohortOneLiner,
   buildPressureRead,
@@ -150,16 +150,31 @@ describe("buildCohortOneLiner", () => {
 });
 
 describe("buildSmartAlertRequest", () => {
-  it("watches Smart Money outflow for a long holder", () => {
+  const prevAppUrl = process.env.APP_URL;
+  const prevSecret = process.env.NANSEN_WEBHOOK_SECRET;
+  beforeEach(() => {
+    process.env.APP_URL = "https://exit-window.fly.dev";
+    process.env.NANSEN_WEBHOOK_SECRET = "test-secret";
+  });
+  afterEach(() => {
+    if (prevAppUrl === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = prevAppUrl;
+    if (prevSecret === undefined) delete process.env.NANSEN_WEBHOOK_SECRET;
+    else process.env.NANSEN_WEBHOOK_SECRET = prevSecret;
+  });
+
+  it("watches Smart Money outflow for a long holder, delivered to the signed webhook for this alarm code", () => {
     const body = buildSmartAlertRequest({
-      chatId: "123456",
+      code: "ABC123",
       coin: "HYPE",
       direction: "long",
       tokenAddress: "0xtoken",
       tokenChain: "hyperevm",
     });
     expect(body.type).toBe("sm-token-flows");
-    expect(body.channels).toEqual([{ type: "telegram", data: { chatId: "123456" } }]);
+    expect(body.channels).toEqual([
+      { type: "webhook", data: { webhookUrl: "https://exit-window.fly.dev/api/nansen-webhook?alarm=ABC123", secret: "test-secret" } },
+    ]);
     expect(body.data.outflow_1h).toEqual({ min: 250_000 });
     expect(body.data.inflow_1h).toBeUndefined();
     expect(body.data.inclusion.tokens).toEqual([{ chain: "hyperevm", address: "0xtoken" }]);
@@ -167,7 +182,7 @@ describe("buildSmartAlertRequest", () => {
 
   it("watches Smart Money inflow for a short holder, with a custom threshold", () => {
     const body = buildSmartAlertRequest({
-      chatId: "999",
+      code: "XYZ999",
       coin: "ETH",
       direction: "short",
       tokenAddress: "0xeth",
@@ -176,6 +191,13 @@ describe("buildSmartAlertRequest", () => {
     });
     expect(body.data.inflow_1h).toEqual({ min: 50_000 });
     expect(body.data.outflow_1h).toBeUndefined();
+  });
+
+  it("throws a clear error instead of building an unsigned webhook when the secret is unset", () => {
+    delete process.env.NANSEN_WEBHOOK_SECRET;
+    expect(() => buildSmartAlertRequest({ code: "ABC123", coin: "HYPE", direction: "long", tokenAddress: "0xtoken", tokenChain: "hyperevm" })).toThrow(
+      /NANSEN_WEBHOOK_SECRET/,
+    );
   });
 });
 

@@ -6,6 +6,8 @@
 import {
   alarmsForChat,
   bindCode,
+  buildWhyQuestion,
+  buildWhyTestQuestion,
   distinctLeaderCount,
   dropWatch,
   formatAlarmMessage,
@@ -14,10 +16,12 @@ import {
   formatOnboardingMessage,
   formatProtectionLine,
   formatTestMessage,
+  formatWhyAnswer,
   loadStore,
   markHeld,
   ownerStillHolds,
   pruneRecent,
+  randomCode,
   readExitDna,
   saveStore,
   setSmartAlertId,
@@ -25,6 +29,7 @@ import {
   shouldFire,
   smartAlertIdsForChat,
   unbindChat,
+  whyCacheKey,
   type RecentReduce,
   type SmartAlertOnboardingInput,
   type Watch,
@@ -33,8 +38,9 @@ import { diffPositions } from "@/lib/follow";
 import { fetchAllMids, fetchClearinghouseState } from "@/lib/hyperliquid";
 import { createSmartAlert, deleteSmartAlert } from "@/lib/intel";
 import { mirrorChange } from "@/lib/mirror";
+import { logCall } from "@/lib/nansen";
 import { buildReport } from "@/lib/report";
-import { getUpdates, sendMessage } from "@/lib/telegram";
+import { answerCallbackQuery, getUpdates, sendMessage, type ReplyMarkup } from "@/lib/telegram";
 import type { OpenPosition, WalletReport } from "@/lib/types";
 
 const TICK_MS = 30_000;
@@ -72,6 +78,139 @@ function pushRecentReduce(groupKey: string, entry: RecentReduce, now: number): R
   pruned.push(entry);
   recentReducesByGroup.set(groupKey, pruned);
   return pruned;
+}
+
+// ---------------------------------------------------------------------------
+// "Why is it exiting?" inline button: Telegram's callback_data is capped at 64 bytes, so each
+// fire/test message gets a short random id instead of the full question, backed by this
+// in-memory map. Bounded so a long-running process can't grow this unboundedly; a Map preserves
+// insertion order, so the oldest entry is always first.
+// ---------------------------------------------------------------------------
+interface WhyContext {
+  leader: string;
+  coin: string;
+  question: string;
+  atMs: number;
+}
+const whyContexts = new Map<string, WhyContext>();
+const WHY_CONTEXT_MAX = 500;
+
+function rememberWhyContext(ctx: WhyContext): string {
+  const id = randomCode(8);
+  whyContexts.set(id, ctx);
+  if (whyContexts.size > WHY_CONTEXT_MAX) {
+    const oldest = whyContexts.keys().next().value;
+    if (oldest !== undefined) whyContexts.delete(oldest);
+  }
+  return id;
+}
+
+function whyButton(id: string): ReplyMarkup {
+  return { inline_keyboard: [[{ text: "Why is it exiting?", callback_data: `why:${id}` }]] };
+}
+
+// Cached per (leader, coin, hour) - see whyCacheKey - so the same reduce tapped twice within an
+// hour doesn't spend a second Agent call.
+const whyAnswerCache = new Map<string, { answer: string; tools: string[] }>();
+
+interface AgentSseEvent {
+  type?: string;
+  text?: string;
+  name?: string;
+  tool_calls?: unknown[];
+  error?: string;
+}
+
+function toolNameOf(entry: unknown): string {
+  if (typeof entry === "string") return entry;
+  if (entry && typeof entry === "object" && typeof (entry as { name?: unknown }).name === "string") {
+    return (entry as { name: string }).name;
+  }
+  return String(entry);
+}
+
+/** Manually streams POST /api/v1/agent/fast: nansenCall/rawFetch in nansen.ts always does
+ * res.json(), which can't consume a text/event-stream response, so this replicates rawFetch's
+ * auth-header pattern directly and parses the SSE body itself. Every call is still recorded in
+ * data/nansen-calls.jsonl via the exported logCall, so the invariant "every Nansen call is
+ * logged" holds even outside the normal nansenCall wrapper. */
+async function askWhyExiting(question: string): Promise<{ answer: string; tools: string[] }> {
+  const key = process.env.NANSEN_API_KEY;
+  if (!key) throw new Error("NANSEN_API_KEY is not set. Add it to .env (never commit it, never log its value).");
+
+  const start = Date.now();
+  const res = await fetch("https://api.nansen.ai/api/v1/agent/fast", {
+    method: "POST",
+    headers: { apikey: key, "Content-Type": "application/json" },
+    body: JSON.stringify({ text: question }),
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    await logCall({
+      endpoint: "agent/fast",
+      cache: "miss",
+      requestSummary: { textLength: question.length },
+      method: "POST",
+      status: res.status,
+      latencyMs: Date.now() - start,
+      rows: null,
+      rateLimitRemaining: null,
+      error: text || `HTTP ${res.status}`,
+    });
+    throw new Error(`Nansen agent/fast ${res.status}: ${text}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer = "";
+  const seenTools = new Set<string>();
+  let finishTools: string[] | null = null;
+  let streamError: string | null = null;
+
+  readLoop: for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      for (const line of rawEvent.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice("data:".length).trim();
+        if (data === "[DONE]") break readLoop;
+        let evt: AgentSseEvent;
+        try {
+          evt = JSON.parse(data) as AgentSseEvent;
+        } catch {
+          continue;
+        }
+        if (evt.type === "delta" && typeof evt.text === "string") answer += evt.text;
+        else if (evt.type === "tool_call" && typeof evt.name === "string") seenTools.add(evt.name);
+        else if (evt.type === "finish") finishTools = Array.isArray(evt.tool_calls) ? evt.tool_calls.map(toolNameOf) : null;
+        else if (evt.type === "error") streamError = typeof evt.error === "string" ? evt.error : "agent error";
+      }
+    }
+  }
+
+  const tools = finishTools ?? [...seenTools];
+  await logCall({
+    endpoint: "agent/fast",
+    cache: "miss",
+    requestSummary: { textLength: question.length },
+    method: "POST",
+    status: res.status,
+    latencyMs: Date.now() - start,
+    rows: tools.length,
+    rateLimitRemaining: null,
+    ...(streamError ? { error: streamError } : {}),
+  });
+
+  if (streamError) throw new Error(`Nansen agent/fast stream error: ${streamError}`);
+  return { answer, tools };
 }
 
 async function tick(): Promise<void> {
@@ -177,7 +316,20 @@ async function tick(): Promise<void> {
                 protectionLine,
               });
 
-        await sendMessage(record.chatId, message)
+        // "Why is it exiting?" attaches to every real reduce fire (single-leader or consensus),
+        // always about the leader/coin that just fired this tick.
+        const whyQuestion = buildWhyQuestion({
+          leaderAddress: leader,
+          leaderLabel: watch.label,
+          coin: change.coin,
+          direction: change.direction,
+          pctClosed: change.reducedFraction * 100,
+          usdValue,
+          atMs: now,
+        });
+        const whyId = rememberWhyContext({ leader, coin: change.coin, question: whyQuestion, atMs: now });
+
+        await sendMessage(record.chatId, message, undefined, whyButton(whyId))
           .then(() => messagesSent++)
           .catch((err) => {
             errors++;
@@ -227,6 +379,41 @@ async function pollTelegram(): Promise<void> {
     }
     for (const u of updates) {
       offset = u.update_id + 1;
+
+      if (u.callback_query) {
+        const cq = u.callback_query;
+        // Must answer immediately - before the (potentially slow) agent call - or the tapped
+        // button shows an infinite loading spinner.
+        await answerCallbackQuery(cq.id).catch((err) =>
+          console.error("answerCallbackQuery failed:", err instanceof Error ? err.message : err),
+        );
+        const cbChat = cq.message?.chat.id;
+        const data = cq.data;
+        if (!cbChat || !data?.startsWith("why:")) continue;
+        const ctx = whyContexts.get(data.slice("why:".length));
+        if (!ctx) {
+          await sendMessage(cbChat, "This button expired. Trigger a new alert or /test to ask again.").catch(() => {});
+          continue;
+        }
+        const cacheKey = whyCacheKey(ctx.leader, ctx.coin, ctx.atMs);
+        let result = whyAnswerCache.get(cacheKey);
+        if (!result) {
+          try {
+            result = await askWhyExiting(ctx.question);
+            whyAnswerCache.set(cacheKey, result);
+          } catch (err) {
+            await sendMessage(cbChat, `Could not reach the Nansen agent: ${err instanceof Error ? err.message : String(err)}`).catch(
+              () => {},
+            );
+            continue;
+          }
+        }
+        await sendMessage(cbChat, formatWhyAnswer(result.answer, result.tools)).catch((err) =>
+          console.error("sendMessage failed:", err instanceof Error ? err.message : err),
+        );
+        continue;
+      }
+
       const chat = u.message?.chat.id;
       const text = u.message?.text?.trim();
       if (!chat || !text) continue;
@@ -249,7 +436,7 @@ async function pollTelegram(): Promise<void> {
         const smartAlerts: SmartAlertOnboardingInput[] = await Promise.all(
           [...byCoinDirection.values()].map(async (w): Promise<SmartAlertOnboardingInput> => {
             try {
-              const created = await createSmartAlert({ chatId: String(chat), coin: w.coin, direction: w.direction });
+              const created = await createSmartAlert({ code: bound.record.code, coin: w.coin, direction: w.direction });
               store = setSmartAlertId(store, bound.record.code, w.coin, created.id);
               return { coin: w.coin, direction: w.direction, status: "created", detail: created.id };
             } catch (err) {
@@ -320,7 +507,16 @@ async function pollTelegram(): Promise<void> {
             medianWindowMin: summary.medianWindowMin,
             appUrl: APP_URL,
           });
-          await sendMessage(chat, message).catch(() => {});
+          // /test must never claim a reduce happened, so its button uses the hypothetical
+          // question (buildWhyTestQuestion), not the real-reduce template.
+          const testQuestion = buildWhyTestQuestion({
+            leaderAddress: watch.leader,
+            leaderLabel: watch.label,
+            coin: watch.coin,
+            direction: watch.direction,
+          });
+          const whyId = rememberWhyContext({ leader: watch.leader, coin: watch.coin, question: testQuestion, atMs: Date.now() });
+          await sendMessage(chat, message, undefined, whyButton(whyId)).catch(() => {});
         }
       }
     }

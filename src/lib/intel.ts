@@ -327,7 +327,7 @@ export interface SmartAlertRequestBody {
   name: string;
   type: "sm-token-flows";
   timeWindow: string;
-  channels: { type: "telegram"; data: { chatId: string } }[];
+  channels: { type: "webhook"; data: { webhookUrl: string; secret: string } }[];
   data: {
     chains: string[];
     events: ["sm-token-flows"];
@@ -338,24 +338,41 @@ export interface SmartAlertRequestBody {
   };
 }
 
+/** Nansen delivers Smart Alerts through its own undocumented bot, which the user never started -
+ * the "telegram" channel type 400s with "Could not send the welcome message to your telegram
+ * channel". A signed webhook delivered to our own route (src/app/api/nansen-webhook) sidesteps
+ * that entirely: Nansen POSTs to us, we verify the signature and forward to the bound chat. */
+function webhookUrlFor(code: string): string {
+  const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+  return `${appUrl}/api/nansen-webhook?alarm=${code}`;
+}
+
+function webhookSecret(): string {
+  const secret = process.env.NANSEN_WEBHOOK_SECRET;
+  if (!secret) {
+    throw new Error("NANSEN_WEBHOOK_SECRET is not set. Add it to .env (never commit it, never log its value).");
+  }
+  return secret;
+}
+
 /** Pure: builds the sm-token-flows body. Long holder watches Smart Money OUTFLOW (SM selling
  * the spot token is exit pressure on a long); short holder watches INFLOW (SM buying/accumulating
  * is squeeze risk on a short). */
 export function buildSmartAlertRequest(params: {
-  chatId: string;
+  code: string;
   coin: string;
   direction: Direction;
   tokenAddress: string;
   tokenChain: string;
   thresholdUsd?: number;
 }): SmartAlertRequestBody {
-  const { chatId, coin, direction, tokenAddress, tokenChain, thresholdUsd = 250_000 } = params;
+  const { code, coin, direction, tokenAddress, tokenChain, thresholdUsd = 250_000 } = params;
   const watchOutflow = direction === "long";
   return {
     name: `Exit Window: SM ${watchOutflow ? "outflow" : "inflow"} on ${coin}`,
     type: "sm-token-flows",
     timeWindow: "10m",
-    channels: [{ type: "telegram", data: { chatId } }],
+    channels: [{ type: "webhook", data: { webhookUrl: webhookUrlFor(code), secret: webhookSecret() } }],
     data: {
       chains: [tokenChain],
       events: ["sm-token-flows"],
@@ -374,9 +391,10 @@ export interface SmartAlertCreated {
 }
 
 /** Resolves the coin's spot token (reusing the same 24h-cached search as cohort) then creates
- * the Nansen smart alert. Never called without an explicit chatId (enforced by the route). */
+ * the Nansen smart alert, delivered to our signed webhook keyed by the alarm code. Never called
+ * without an explicit code (enforced by the route). */
 export async function createSmartAlert(params: {
-  chatId: string;
+  code: string;
   coin: string;
   direction: Direction;
   thresholdUsd?: number;
