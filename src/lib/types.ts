@@ -50,6 +50,11 @@ export interface ExitWindow {
   horizonMin: number;
   maxAdversePct: number; // worst move against a holder within the horizon
   candleInterval: string; // "1m" | "5m" | "15m" | "1h"
+  // Direction-adjusted % price move against a holder from firstReducePx to the open of the candle
+  // at firstReduceAt + delaySec, for delaySec in [60, 300, 900, 3600]. Positive = a copier who
+  // waited that long before following the wallet's first reduce gave back that much. One entry
+  // per delay with a resolvable candle; a delay past the fetched candle range is omitted, not 0.
+  lateCostPct: { delaySec: number; pct: number }[];
 }
 
 export const LATENCIES_SEC = [0, 60, 300, 900, 3600] as const;
@@ -110,6 +115,26 @@ export interface AlarmReplay {
   perEpisode: AlarmReplayEpisode[];
 }
 
+/** How much a copier gives up, on average, by following this wallet's first reduce late instead
+ * of on the alarm - built from every window's lateCostPct across this wallet's timed exits. null
+ * (not an empty summary) when no window has any resolvable lateCostPct entry. */
+export interface FollowLateSummary {
+  perDelay: { delaySec: number; meanPct: number }[]; // only delays with at least one sample
+  worst: { coin: string; delaySec: number; pct: number } | null;
+}
+
+/** How likely a holder is to get caught by this wallet's own exit, distilled from exitDna and the
+ * report's own medianWindowMin - not a new measurement, a plain-English read of numbers already
+ * on the report. unknown when exitDna has no sample (nothing closed yet to judge by). */
+export interface ExitRisk {
+  level: "high" | "medium" | "low" | "unknown";
+  fullExitPct: number; // exitDna.fullExitAfterFirstReducePct, 0 when unknown
+  minutesToFlat: number | null; // exitDna.firstReduceToFlatMedianMin
+  medianWindowMin: number | null; // same as WalletReport.medianWindowMin
+  sample: number; // exitDna.sample, 0 when unknown
+  sentence: string;
+}
+
 export interface WalletReport {
   address: string;
   label: string | null; // Nansen label if known
@@ -127,6 +152,11 @@ export interface WalletReport {
   episodes: Episode[];
   exitDna: ExitDna | null; // null when there aren't enough closed, observed episodes to say anything
   alarmReplay: AlarmReplay | null; // null when no closed episode has observed candles to replay
+  // Optional (not just nullable): a WalletReport literal built before these fields existed - a
+  // test fixture, an older cached-report shape - stays valid without updating every call site.
+  // buildReport() always sets both.
+  followLateSummary?: FollowLateSummary | null;
+  exitRisk?: ExitRisk;
   openPositions: OpenPosition[];
   nansenCalls: number; // Nansen API calls this report cost
   backtestEligible: number; // episodes with a full observed entry+exit, used in the latency backtest

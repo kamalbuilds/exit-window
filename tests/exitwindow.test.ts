@@ -58,3 +58,38 @@ describe("measureWindow", () => {
     expect(() => measureWindow(ep, [])).toThrow();
   });
 });
+
+describe("measureWindow lateCostPct", () => {
+  it("long: positive pct when price is lower (against the holder) at firstReduceAt + delay", () => {
+    const ep = episode("long", 100);
+    // 1-min candles at offsets 1, 5, 15, 60 cover exactly the 60s/300s/900s/3600s delay points.
+    const candles = [candle(1, 98, 100), candle(5, 96, 98), candle(15, 94, 96), candle(60, 90, 92)];
+    const w = measureWindow(ep, candles, 1, 4000);
+    expect(w.lateCostPct).toEqual([
+      { delaySec: 60, pct: 1 }, // open 99, (100-99)/100*100
+      { delaySec: 300, pct: 3 }, // open 97
+      { delaySec: 900, pct: 5 }, // open 95
+      { delaySec: 3600, pct: 9 }, // open 91
+    ]);
+  });
+
+  it("short: positive pct when price is higher (against the holder) at firstReduceAt + delay", () => {
+    const ep = episode("short", 100);
+    const candles = [candle(1, 100, 102)]; // open 101
+    const w = measureWindow(ep, candles, 1, 4000);
+    expect(w.lateCostPct.find((c) => c.delaySec === 60)?.pct).toBe(1);
+  });
+
+  it("omits a delay that falls in a gap between fetched candles, instead of faking a 0", () => {
+    const ep = episode("long", 100);
+    // Covers the 60s and 900s/3600s points (offsets 1 and 15/60 min) but leaves a real gap at the
+    // 300s point (offset 5 min) - unlike a delay past the last candle, priceAt can't clamp this.
+    const candles = [candle(1, 98, 100), candle(15, 94, 96), candle(60, 90, 92)];
+    const w = measureWindow(ep, candles, 1, 4000);
+    expect(w.lateCostPct).toEqual([
+      { delaySec: 60, pct: 1 },
+      { delaySec: 900, pct: 5 },
+      { delaySec: 3600, pct: 9 },
+    ]);
+  });
+});

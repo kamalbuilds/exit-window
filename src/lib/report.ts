@@ -13,9 +13,20 @@ import {
 } from "./nansen";
 import { loadFills, saveFills, mergeFills } from "./fills-store";
 import { fillsToEpisodes } from "./positions";
-import { measureWindow } from "./exitwindow";
+import { measureWindow, priceAt } from "./exitwindow";
 import { latencyTax, buildVerdict } from "./backtest";
-import type { AlarmReplay, AlarmReplayEpisode, Episode, ExitDna, ExitWindow, Fill, OpenPosition, WalletReport } from "./types";
+import type {
+  AlarmReplay,
+  AlarmReplayEpisode,
+  Episode,
+  ExitDna,
+  ExitRisk,
+  ExitWindow,
+  Fill,
+  FollowLateSummary,
+  OpenPosition,
+  WalletReport,
+} from "./types";
 import { LATENCIES_SEC } from "./types";
 
 const MAX_PAGES = 5;
@@ -174,18 +185,6 @@ function mean(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
-/** The open of the candle covering `t`, or the nearest available candle's price when `t` falls
- * outside the fetched range (before the first candle: its open; after the last: its close) -
- * covers a 24h-hold replay point that hasn't happened yet for a recently-closed episode. */
-function priceAt(candles: Candle[], t: number): number | null {
-  if (candles.length === 0) return null;
-  const sorted = [...candles].sort((a, b) => a.t - b.t);
-  if (t < sorted[0].t) return sorted[0].o;
-  if (t >= sorted[sorted.length - 1].T) return sorted[sorted.length - 1].c;
-  const containing = sorted.find((c) => t >= c.t && t < c.T);
-  return containing ? containing.o : null;
-}
-
 /** One plain sentence on why the latency backtest is empty or thin (needs 3+ eligible episodes,
  * see buildVerdict), or null when there's enough to trust the numbers. */
 function backtestNote(episodes: Episode[], eligibleCount: number, lookbackDays: number): string | null {
@@ -293,6 +292,52 @@ export function computeAlarmReplay(episodes: Episode[], candlesByEpisode: (Candl
   };
 }
 
+/** Mean lateCostPct per delay across every window's timed exits, plus the single worst
+ * (coin, delaySec, pct). null when no window measured any delay at all (e.g. every episode too
+ * recent for its candles to reach even the 60s point). */
+export function computeFollowLateSummary(windows: ExitWindow[]): FollowLateSummary | null {
+  const flat = windows.flatMap((w) => w.lateCostPct.map((c) => ({ coin: w.coin, delaySec: c.delaySec, pct: c.pct })));
+  if (flat.length === 0) return null;
+
+  const perDelay = LATENCIES_SEC.filter((s) => s > 0)
+    .map((delaySec) => ({ delaySec, samples: flat.filter((c) => c.delaySec === delaySec) }))
+    .filter((g) => g.samples.length > 0)
+    .map((g) => ({ delaySec: g.delaySec, meanPct: mean(g.samples.map((s) => s.pct)) }));
+
+  const worst = flat.reduce((a, b) => (b.pct > a.pct ? b : a));
+
+  return { perDelay, worst: { coin: worst.coin, delaySec: worst.delaySec, pct: worst.pct } };
+}
+
+/** A plain-English read of exitDna + medianWindowMin, not a new measurement: how likely a holder
+ * is to get caught by this wallet's own exit. unknown when exitDna has no sample yet. */
+export function computeExitRisk(exitDna: ExitDna | null, medianWindowMin: number | null): ExitRisk {
+  const sample = exitDna?.sample ?? 0;
+  const fullExitPct = exitDna?.fullExitAfterFirstReducePct ?? 0;
+  const minutesToFlat = exitDna?.firstReduceToFlatMedianMin ?? null;
+
+  let level: ExitRisk["level"];
+  if (sample < 1) {
+    level = "unknown";
+  } else if (fullExitPct >= 70 && ((medianWindowMin !== null && medianWindowMin <= 60) || (minutesToFlat !== null && minutesToFlat <= 60))) {
+    level = "high";
+  } else if (fullExitPct < 40 && medianWindowMin !== null && medianWindowMin > 240) {
+    level = "low";
+  } else {
+    level = "medium";
+  }
+
+  const sentence =
+    level === "unknown"
+      ? "Not enough closed exits yet to size holder risk."
+      : `When this wallet starts selling it usually ${fullExitPct >= 50 ? "finishes" : "trims"}: ` +
+        `${fullExitPct.toFixed(0)}% of first reduces became full exits` +
+        (minutesToFlat !== null ? `, median ${minutesToFlat.toFixed(0)}m to flat` : "") +
+        `. Holder risk: ${level}.`;
+
+  return { level, fullExitPct, minutesToFlat, medianWindowMin, sample, sentence };
+}
+
 const reportCache = new Map<string, { report: WalletReport; cachedAt: number }>();
 const REPORT_CACHE_TTL_MS = 10 * 60_000;
 
@@ -364,6 +409,7 @@ export async function buildReport(address: string, options: BuildReportOptions =
   const openPositions = await attachMarkPrices(positionsResult.positions);
   const unrealizedPnlUsd = openPositions.reduce((sum, p) => sum + (p.unrealizedPnlUsd ?? 0), 0);
   const medianWindowMin = median(windows.map((w) => w.windowMin).filter((m): m is number => m !== null));
+  const exitDna = computeExitDna(episodes);
 
   const degraded = fillsResult.degraded || pnlResult.degraded || positionsResult.degraded;
   const dataAsOf = degraded
@@ -386,8 +432,10 @@ export async function buildReport(address: string, options: BuildReportOptions =
     realizedPnlUsd: pnlResult.realizedPnlUsd,
     unrealizedPnlUsd,
     episodes,
-    exitDna: computeExitDna(episodes),
+    exitDna,
     alarmReplay: computeAlarmReplay(episodes, candlesByEpisode),
+    followLateSummary: computeFollowLateSummary(windows),
+    exitRisk: computeExitRisk(exitDna, medianWindowMin),
     openPositions,
     nansenCalls: networkCallsSince(callsBefore),
     backtestEligible: eligible.length,
