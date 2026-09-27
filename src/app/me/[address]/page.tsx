@@ -5,6 +5,7 @@ import { CaretDown } from "@phosphor-icons/react";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import type { AlarmCreated, Companion, OverlapRow } from "@/lib/types";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
+import { PositionChart } from "@/components/chart/PositionChart";
 import { TokenCell } from "@/components/TokenIcon";
 import { companionLabel, formatMinutes, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
@@ -214,6 +215,7 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
                   <PositionRows
                     key={rowKey(r)}
                     row={r}
+                    address={address}
                     open={open.has(rowKey(r))}
                     onToggleOpen={() => toggleOpen(rowKey(r))}
                     active={active}
@@ -233,6 +235,7 @@ export default function MyTradesPage({ params }: { params: Promise<{ address: st
 
 function PositionRows({
   row,
+  address,
   open,
   onToggleOpen,
   active,
@@ -240,6 +243,7 @@ function PositionRows({
   onTopWindow,
 }: {
   row: OverlapRow;
+  address: string;
   open: boolean;
   onToggleOpen: () => void;
   active: Set<WatchKey>;
@@ -326,7 +330,7 @@ function PositionRows({
       {open && (
         <tr className="border-b border-rule">
           <td colSpan={10} id={detailId} className="bg-bezel/40 px-4 py-4">
-            <PositionDetail row={row} topWindow={top ? topWindow : null} pressure={p} active={active} onToggle={onToggle} />
+            <PositionDetail row={row} address={address} topWindow={top ? topWindow : null} pressure={p} active={active} onToggle={onToggle} />
           </td>
         </tr>
       )}
@@ -336,12 +340,14 @@ function PositionRows({
 
 function PositionDetail({
   row,
+  address,
   topWindow,
   pressure,
   active,
   onToggle,
 }: {
   row: OverlapRow;
+  address: string;
   topWindow: QueuedWalletState | null;
   pressure: Pressure | null | undefined;
   active: Set<WatchKey>;
@@ -356,6 +362,7 @@ function PositionDetail({
           {pressure.read}
         </p>
       )}
+      <PositionChart coin={row.coin} address={address} height={360} />
       <CohortBar coin={row.coin} />
       {row.companions.length === 0 ? (
         <p className="text-[13px] text-ink-2 border-t border-rule pt-3">

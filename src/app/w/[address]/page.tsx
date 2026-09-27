@@ -5,6 +5,7 @@ import { XLogo } from "@phosphor-icons/react";
 import { use, useState, type ReactNode } from "react";
 import type { AlarmReplay, Episode, ExitDna, ExitWindow, WalletReport } from "@/lib/types";
 import { Chronograph } from "@/components/Chronograph";
+import { PositionChart } from "@/components/chart/PositionChart";
 import { ErrorState } from "@/components/States";
 import { formatAgo, formatDate, formatMinutes, formatPct, formatUsd, shortAddr } from "@/components/format";
 import { usePoll } from "@/components/usePoll";
@@ -136,6 +137,13 @@ function Report({ report, address, fetchedAt }: { report: WalletReport; address:
         <div className="lg:col-span-8 flex flex-col gap-6 min-w-0">
           {report.exitDna && <ExitDnaBlock dna={report.exitDna} />}
           {report.alarmReplay && <AlarmReplayBlock ar={report.alarmReplay} />}
+
+          {windows.length > 0 && (
+            <div>
+              <p className="label mb-2">Price and exits</p>
+              <PositionChart coin={windows[0].coin} address={address} height={360} />
+            </div>
+          )}
 
           <section className="panel overflow-hidden">
             <PanelTitle meta="t = 0 at the first reduce">Every exit, timed</PanelTitle>
