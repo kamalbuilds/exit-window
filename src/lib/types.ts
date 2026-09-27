@@ -160,6 +160,7 @@ export interface PositionChange {
 export interface Companion {
   address: string;
   label: string | null;
+  displayLabel: string; // best label for why this wallet matters; never a referral-code label
   positionValueUsd: number;
   size: number;
   entryPx: number;

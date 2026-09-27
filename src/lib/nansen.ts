@@ -32,6 +32,7 @@ const TTL_MS: Record<string, number> = {
   "smart-money/perp-trades": 5 * 60_000,
   "profiler/perp-positions": 30_000,
   "tgm/perp-positions": 10 * 60_000,
+  "profiler/address/labels": 24 * 60 * 60_000,
 };
 
 function ttlFor(endpoint: string): number | null {
@@ -643,12 +644,16 @@ export async function fetchSmartMoneyPerpTrades(
  * fewer than 3 same-side smart_money holders survive excluding the user). Point-in-time snapshot,
  * no date range - cached 10 min per (coin, side, labelType) since the cache key is the full
  * canonicalized request body. */
+/** Companion row before displayLabel is resolved (overlap.ts's job: a leaderboard label is
+ * sometimes a referral-code label, worth a real address/labels lookup before it's shown). */
+export type RawCompanion = Omit<Companion, "displayLabel">;
+
 export async function fetchTgmPerpPositions(
   coin: string,
   side: "Long" | "Short",
   labelType: "smart_money" | "whale" | "public_figure" = "smart_money",
   perPage = 10,
-): Promise<CachedResult<Companion[]>> {
+): Promise<CachedResult<RawCompanion[]>> {
   return nansenCall(
     "tgm/perp-positions",
     {
@@ -661,7 +666,7 @@ export async function fetchTgmPerpPositions(
     (j) => {
       const data = (j as { data?: Record<string, unknown>[] }).data ?? [];
       return data.map(
-        (r): Companion => ({
+        (r): RawCompanion => ({
           address: String(r.address ?? ""),
           label: (r.address_label as string) || null,
           positionValueUsd: Number(r.position_value_usd ?? 0),
@@ -674,6 +679,27 @@ export async function fetchTgmPerpPositions(
       );
     },
   );
+}
+
+export interface AddressLabel {
+  label: string;
+  category: string | null;
+  kind: string[];
+}
+
+/** All Nansen labels known for one address, for resolving a real displayLabel when the
+ * leaderboard label is junk (a referral code, "High Balance"). Cached 24h per address. */
+export async function fetchAddressLabels(address: string, chain = "hyperliquid"): Promise<CachedResult<AddressLabel[]>> {
+  return nansenCall("profiler/address/labels", { address, chain, pagination: { page: 1, per_page: 100 } }, (j) => {
+    const data = (j as { data?: Record<string, unknown>[] }).data ?? [];
+    return data.map(
+      (r): AddressLabel => ({
+        label: String(r.label ?? ""),
+        category: (r.category as string) ?? null,
+        kind: Array.isArray(r.kind) ? (r.kind as string[]) : [],
+      }),
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
