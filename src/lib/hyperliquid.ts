@@ -1,5 +1,6 @@
 // Hyperliquid public info API. No key required, no credits, no rate-limit budget to protect -
 // so this client is plain fetch with no cache layer of its own.
+import type { Direction, OpenPosition } from "./types";
 
 export type CandleInterval = "1m" | "5m" | "15m" | "1h";
 
@@ -78,4 +79,39 @@ export async function attachMarkPrices<T extends { coin: string; markPx: number 
   if (positions.length === 0) return positions;
   const mids = await fetchAllMids();
   return positions.map((p) => ({ ...p, markPx: mids[p.coin] ?? null }));
+}
+
+interface RawClearinghousePosition {
+  coin: string;
+  szi: string;
+  entryPx: string;
+  unrealizedPnl: string;
+  leverage?: { type: string; value: number };
+}
+
+/** The user's own open positions, straight from Hyperliquid's public account state - free, no
+ * key, no Nansen credits. This is the "your side" of an overlap: what tgm/perp-positions'
+ * labeled wallets are compared against in overlap.ts. markPx is left null; attachMarkPrices
+ * fills it from the same allMids cache used everywhere else. */
+export async function fetchClearinghouseState(address: string): Promise<OpenPosition[]> {
+  const res = await fetch("https://api.hyperliquid.xyz/info", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "clearinghouseState", user: address }),
+  });
+  if (!res.ok) throw new Error(`Hyperliquid clearinghouseState ${res.status}`);
+  const raw = (await res.json()) as { assetPositions?: { position: RawClearinghousePosition }[] };
+  return (raw.assetPositions ?? []).map(({ position: p }) => {
+    const szi = Number(p.szi);
+    const direction: Direction = szi < 0 ? "short" : "long";
+    return {
+      coin: p.coin,
+      direction,
+      size: Math.abs(szi),
+      entryPx: Number(p.entryPx),
+      markPx: null,
+      unrealizedPnlUsd: Number(p.unrealizedPnl),
+      leverage: p.leverage?.value ?? null,
+    };
+  });
 }
