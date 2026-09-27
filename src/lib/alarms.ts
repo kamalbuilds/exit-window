@@ -335,7 +335,11 @@ function formatOneOnboardingWatch(w: OnboardingWatchInput, appUrl: string): stri
     lines.push(`Position: not currently open on ${watch.coin}.`);
   }
 
-  lines.push(`Median exit window: ${fmtMin(medianWindowMin)} before a 1% move against holders.`);
+  lines.push(
+    medianWindowMin === null
+      ? "Exit window: this wallet's recent exits are still being timed."
+      : `Median exit window: ${fmtMin(medianWindowMin)} before a 1% move against holders.`,
+  );
   if (exitDna) lines.push(`Exit DNA: ${exitDna}`);
 
   if (ownerPosition && leaderPosition && leaderPosition.entryPx > 0) {
@@ -368,7 +372,12 @@ export function friendlyNansenError(rawMessage: string): string {
   if (/plan limit/i.test(rawMessage)) {
     return "Nansen's plan limit for this feature was reached.";
   }
-  return "Nansen is temporarily unavailable.";
+  // Only raw upstream payloads (JSON bodies, HTTP status lines) get replaced; our own plain
+  // reasons like "no resolvable spot token" are already readable and more useful than a generic line.
+  if (/[{}]|\b[45]\d\d\b|request_id|statusCode/.test(rawMessage)) {
+    return "Nansen is temporarily unavailable.";
+  }
+  return rawMessage;
 }
 
 /** One line per distinct coin on whether Nansen's own on-chain smart alert got armed alongside
